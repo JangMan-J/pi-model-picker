@@ -11,12 +11,31 @@ const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8')
   .replace(/^import .*;\n/gm, '').replace('export default function', 'function');
 let settingsText = '{}';
 let settingsExists = true;
+let stateText;
+let stateReads = 0;
+let stateWrites = 0;
+let writeFails = false;
 const { Picker, maker, register, resolve } = vm.runInNewContext(
   ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText +
   '\n({ Picker: ModelPickerComponent, maker: modelMaker, register: modelPickerExtension, resolve: resolveShortcuts });',
   {
-    ...tui, join, homedir: () => '/test-home', existsSync: () => settingsExists,
-    readFileSync: () => settingsText,
+    ...tui, join, homedir: () => '/test-home',
+    readFileSync: path => {
+      if (path.endsWith('/settings.json')) {
+        if (!settingsExists) throw new Error('missing settings');
+        return settingsText;
+      }
+      assert.equal(path, '/test-home/.pi/agent/pi-model-picker-state.json');
+      stateReads++;
+      if (stateText === undefined) throw new Error('missing state');
+      return stateText;
+    },
+    writeFileSync: (path, text) => {
+      assert.equal(path, '/test-home/.pi/agent/pi-model-picker-state.json');
+      if (writeFails) throw new Error('permission denied');
+      stateText = text;
+      stateWrites++;
+    },
     DynamicBorder: class { render(w) { return ['─'.repeat(w)]; } invalidate() {} },
   },
 );
@@ -170,6 +189,7 @@ for (const [config, expectedKeys, input, help] of [
   [{ shortcut: false, groupingShortcut: false }, [], toggle, 'Grouping: providers'],
 ]) {
   settingsText = JSON.stringify({ 'pi-model-picker': config });
+  stateText = undefined;
   const commands = new Map();
   const shortcuts = new Map();
   let selected;
@@ -190,4 +210,56 @@ for (const [config, expectedKeys, input, help] of [
   assert.equal(renders, 2);
   assert.deepEqual(Array.from(shortcuts.keys()), expectedKeys);
 }
-console.log('PASS: both shortcut settings, defaults/fallbacks, aliases/disable, Ctrl+Shift+G (not Ctrl+G), maker tabs, search, exact selection, narrow rendering, command integration.');
+const warnings = [];
+let lastSelected;
+function memoryCommand(rememberLastTab) {
+  settingsText = JSON.stringify({ 'pi-model-picker': { rememberLastTab } });
+  const commands = new Map();
+  register({ registerCommand: (name, spec) => commands.set(name, spec), registerShortcut() {}, setModel: async m => { lastSelected = m; return true; } });
+  return commands.get('models').handler;
+}
+async function openRemembered(handler, keys, check = () => {}) {
+  await handler('', {
+    model: active, modelRegistry: { refresh() {}, getAvailable: () => models },
+    ui: { notify: (message, type) => { if (type === 'warning') warnings.push(message); }, custom: async factory => {
+      let result;
+      const ui = factory({ requestRender() {} }, theme, {}, value => { result = value; });
+      check(ui.render(140).join('\n'));
+      for (const key of keys) ui.handleInput(key);
+      return result;
+    } },
+  });
+}
+stateText = undefined;
+const remembered = memoryCommand(); // default true
+await openRemembered(remembered, [toggle, '\t', '\x1b']);
+assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Google' }, 'Escape saves the visited tab');
+const checkGoogle = text => { assert.match(text, /ctrl\+shift\+g: makers/); assert.match(text, /\[antigravity\]\s+Gemini/); };
+await openRemembered(remembered, ['\x1b'], checkGoogle); // same extension instance
+await openRemembered(memoryCommand(true), ['\r'], checkGoogle); // reload/restart
+assert.equal(maker(lastSelected), 'Google');
+assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Google' }, 'Enter saves the tab too');
+stateText = JSON.stringify({ byMaker: false, category: 'openrouter' });
+await openRemembered(memoryCommand(true), ['\x1b'], text => assert.match(text, /ctrl\+shift\+g: providers/));
+assert.deepEqual(JSON.parse(stateText), { byMaker: false, category: 'openrouter' });
+const saved = stateText;
+const counts = [stateReads, stateWrites];
+await openRemembered(memoryCommand(false), [toggle, '\x1b'], text => { assert.match(text, /ctrl\+shift\+g: providers/); assert.match(text, /▶ Claude Sonnet/); });
+assert.equal(stateText, saved, 'disabled memory must not overwrite the saved tab');
+assert.deepEqual([stateReads, stateWrites], counts, 'disabled memory must not read/write state');
+stateText = JSON.stringify({ byMaker: true, category: 'Google' });
+await openRemembered(memoryCommand('false'), ['\x1b'], checkGoogle); // invalid flag falls back to true
+stateText = JSON.stringify({ byMaker: true, category: 'Removed tab' });
+await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, /\[antigravity\]\s+Claude Sonnet/));
+assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Anthropic' }, 'missing tab falls back to the active model');
+for (const invalid of [undefined, '{broken', 'null', '[]', '{"byMaker":"true","category":"Google"}']) {
+  stateText = invalid;
+  await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, /ctrl\+shift\+g: providers/));
+  assert.deepEqual(JSON.parse(stateText), { byMaker: false, category: 'antigravity' });
+}
+assert.equal(warnings.length, 0, 'absent/malformed state must not cause warnings');
+writeFails = true;
+await openRemembered(memoryCommand(), ['\r']);
+assert.equal(lastSelected, active, 'state write failure must not prevent model selection');
+assert.equal(warnings.length, 1);
+console.log('PASS: tab memory across reopen/restart, Enter/Escape, disabled memory, malformed/missing state, unavailable tab, write failure; shortcuts, grouping, selection and layout.');

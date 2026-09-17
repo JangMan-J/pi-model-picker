@@ -30,7 +30,7 @@
  *   to disable the shortcut entirely (the /models command still works).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -44,29 +44,22 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 const DEFAULT_SHORTCUT = "ctrl+shift+m";
 const DEFAULT_GROUPING_SHORTCUT = "ctrl+shift+g";
 
-/**
- * Read a shortcut from `~/.pi/agent/settings.json` -> `pi-model-picker`.
- * Accepts a string, an array of strings, or false/[] to disable.
- * Use the supplied default when the setting is absent or has an invalid type.
- */
-function resolveShortcuts(setting = "shortcut", fallback = DEFAULT_SHORTCUT): string[] {
-	const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
-	if (!existsSync(settingsPath)) return [fallback];
-
+function readSetting(setting: string): unknown {
 	try {
-		const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-		const config = raw["pi-model-picker"] as Record<string, unknown> | undefined;
-		const shortcut = config?.[setting];
-		if (shortcut === undefined) return [fallback];
-		if (shortcut === false) return [];
-		if (typeof shortcut === "string") return shortcut ? [shortcut] : [];
-		if (Array.isArray(shortcut)) return shortcut.filter((s): s is string => typeof s === "string" && s.length > 0);
-
-		return [fallback];
+		const raw = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "settings.json"), "utf-8"));
+		return raw?.["pi-model-picker"]?.[setting];
 	} catch {
-		// Malformed settings.json — fall back to default rather than crashing pi startup
-		return [fallback];
+		return undefined; // Missing or malformed settings use defaults.
 	}
+}
+
+/** Accept a key, multiple keys, or false/[] to disable. */
+function resolveShortcuts(setting = "shortcut", fallback = DEFAULT_SHORTCUT): string[] {
+	const shortcut = readSetting(setting);
+	if (shortcut === false) return [];
+	if (typeof shortcut === "string") return shortcut ? [shortcut] : [];
+	if (Array.isArray(shortcut)) return shortcut.filter((s): s is string => typeof s === "string" && s.length > 0);
+	return [fallback];
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -117,6 +110,7 @@ function modelMaker(model: Model<Api>): string {
 interface ModelPickerOptions {
 	allModels: Model<Api>[];
 	currentModel: Model<Api> | undefined;
+	lastTab?: { byMaker: boolean; category: string };
 	onSelect: (model: Model<Api>) => void;
 	onCancel: () => void;
 }
@@ -143,14 +137,14 @@ class ModelPickerComponent {
 	private filteredRows: Model<Api>[] = [];
 
 	constructor(private opts: ModelPickerOptions, private groupingShortcuts = [DEFAULT_GROUPING_SHORTCUT]) {
+		this.byMaker = opts.lastTab?.byMaker ?? false;
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
 
-		// Start on the category of the current model
+		// Restore the saved tab if available, otherwise follow the current model.
 		const cur = opts.currentModel;
-		const startCat = cur
-			? (this.byCategory.has(cur.provider) ? cur.provider : this.categories[0])
-			: this.categories[0];
+		const startCat = opts.lastTab && this.byCategory.has(opts.lastTab.category)
+			? opts.lastTab.category : cur ? this.categoryFor(cur) : this.categories[0];
 		this.catIndex = Math.max(0, this.categories.indexOf(startCat ?? ""));
 
 		// Build the search Input
@@ -170,6 +164,10 @@ class ModelPickerComponent {
 			);
 			this.rowIndex = Math.max(0, idx);
 		}
+	}
+
+	getLastTab() {
+		return { byMaker: this.byMaker, category: this.categories[this.catIndex] ?? "" };
 	}
 
 	// ── public Focusable propagation ─────────────────────────────────────
@@ -499,6 +497,8 @@ class ModelPickerComponent {
 
 export default function modelPickerExtension(pi: ExtensionAPI) {
 	const groupingShortcuts = resolveShortcuts("groupingShortcut", DEFAULT_GROUPING_SHORTCUT);
+	const rememberLastTab = readSetting("rememberLastTab") !== false;
+	const statePath = join(homedir(), ".pi", "agent", "pi-model-picker-state.json");
 	async function openPicker(ctx: ExtensionContext) {
 		// Same logic as /model: refresh from disk, then only models with auth configured
 		ctx.modelRegistry.refresh();
@@ -509,12 +509,31 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 			return;
 		}
 
+		let lastTab: ModelPickerOptions["lastTab"];
+		if (rememberLastTab) {
+			try {
+				const saved = JSON.parse(readFileSync(statePath, "utf-8"));
+				if (typeof saved?.byMaker === "boolean" && typeof saved?.category === "string") lastTab = saved;
+			} catch { /* No usable saved tab: use the current model. */ }
+		}
+
 		const selected = await ctx.ui.custom<Model<Api> | null>((tui, theme, _kb, done) => {
+			const close = (model: Model<Api> | null) => {
+				if (rememberLastTab) {
+					try {
+						writeFileSync(statePath, JSON.stringify(picker.getLastTab()), { mode: 0o600 });
+					} catch {
+						ctx.ui.notify("Could not save the last model tab.", "warning");
+					}
+				}
+				done(model);
+			};
 			const picker = new ModelPickerComponent({
 				allModels,
 				currentModel: ctx.model ?? undefined,
-				onSelect: (m) => done(m),
-				onCancel: () => done(null),
+				lastTab,
+				onSelect: close,
+				onCancel: () => close(null),
 			}, groupingShortcuts);
 
 			// Give the picker focus so the embedded Input gets IME cursor
