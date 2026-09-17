@@ -82,7 +82,7 @@ for (const [id, expected] of [
   ['gemini-99-new-variant', 'Google'], ['llama-99-new-variant', 'Meta'],
   ['deepseek-v99-new-variant', 'DeepSeek'], ['qwen99-new-variant', 'Qwen'],
 ]) assert.equal(maker(model(`accounts/fireworks/models/${id}`, 'Custom alias')), expected);
-for (const prefix of ['OpenAI', 'Anthropic', 'Google', 'Meta', 'DeepSeek', 'Qwen']) {
+for (const prefix of ['OpenAI', 'Anthropic', 'Google', 'Meta']) {
   for (const label of [`${prefix}: Example`, `${prefix.toLowerCase()}:Example`]) {
     const m = Object.freeze(model('example', label));
     const p = new Picker({ allModels: [m], currentModel: m, onSelect() {}, onCancel() {} });
@@ -91,6 +91,16 @@ for (const prefix of ['OpenAI', 'Anthropic', 'Google', 'Meta', 'DeepSeek', 'Qwen
     assert.ok(p.render(120, theme).some(line => /\[openrouter\]\s+Example/.test(line)), `redundant maker prefix: ${label}`);
     assert.equal(m.name, label, 'display cleanup must not mutate model metadata');
   }
+}
+for (const prefix of ['DeepSeek', 'Qwen']) {
+  const m = model('example', `${prefix}: Example`);
+  const p = new Picker({ allModels: [m], currentModel: m, onSelect() {}, onCancel() {} });
+  p.handleInput(toggle);
+  assert.deepEqual(Array.from(p.categories), ['Open Wts']);
+  assert.equal(p.filteredRows[p.rowIndex], m);
+  assert.ok(p.render(120, theme).some(line => line.includes(`${prefix}: Example`)), 'Open Wts keeps the maker name');
+  p.handleInput(toggle);
+  assert.equal(p.filteredRows[p.rowIndex], m, 'toggle back preserves selection');
 }
 const other = model('moonshot/kimi', 'Moonshot: Kimi');
 const otherPicker = new Picker({ allModels: [other], currentModel: other, onSelect() {}, onCancel() {} });
@@ -109,7 +119,8 @@ for (const plainCtrlG of ['\x07', '\x1b[103;5u']) {
 }
 picker.handleInput(toggle);
 assert.equal(picker.byMaker, true);
-assert.deepEqual(Array.from(picker.categories), ['OpenAI', 'Anthropic', 'Google', 'Meta', 'DeepSeek', 'Qwen', 'Other']);
+assert.deepEqual(Array.from(picker.categories), ['OpenAI', 'Anthropic', 'Google', 'Meta', 'Open Wts', 'Other']);
+assert.equal(picker.byCategory.get('Open Wts').length, 3, 'DeepSeek and Qwen models share one tab');
 assert.equal(picker.filteredRows[picker.rowIndex], active);
 assert.equal(picker.filteredRows.length, 2, 'both providers must remain selectable');
 assert.equal(Array.from(picker.byCategory.values()).flat().length, models.length, 'no model lost');

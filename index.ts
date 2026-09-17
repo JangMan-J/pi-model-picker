@@ -181,7 +181,9 @@ class ModelPickerComponent {
 	// ── category building ────────────────────────────────────────────────
 
 	private categoryFor(model: Model<Api>): string {
-		return this.byMaker ? modelMaker(model) : model.provider;
+		if (!this.byMaker) return model.provider;
+		const maker = modelMaker(model);
+		return ["DeepSeek", "Qwen"].includes(maker) ? "Open Wts" : maker;
 	}
 
 	private buildCategories(): Map<string, Model<Api>[]> {
@@ -205,7 +207,7 @@ class ModelPickerComponent {
 		}
 
 		if (this.byMaker) {
-			return new Map([...Object.keys(MAKERS), "Other"]
+			return new Map(["OpenAI", "Anthropic", "Google", "Meta", "Open Wts", "Other"]
 				.filter((key) => map.has(key)).map((key) => [key, map.get(key)!]));
 		}
 
@@ -458,7 +460,7 @@ class ModelPickerComponent {
 		const curMark = isCurrent ? " ●" : "";
 		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(curMark) - 2;
 		const label = this.byMaker
-			? model.name.replace(new RegExp(`^${modelMaker(model)}:\\s*`, "i"), "")
+			? model.name.replace(new RegExp(`^${this.categoryFor(model)}:\\s*`, "i"), "")
 			: model.name;
 		const tag = `[${model.provider}]`;
 		const name = this.byMaker ? `${tag}${" ".repeat(providerWidth - visibleWidth(tag) + 1)}${label}` : label;
