@@ -44,6 +44,20 @@ const model = (id, name, provider = 'openrouter') => ({
   id, name, provider, reasoning: true, input: ['text', 'image'],
   contextWindow: 200000, cost: { input: 3, output: 15 },
 });
+for (const providers of [['groq', 'openrouter'], ['groq', 'fireworks-dedicated', '供应商']]) {
+  const fixtures = providers.map(provider => model('claude-sonnet', 'Claude Sonnet', provider));
+  const p = new Picker({ allModels: fixtures, currentModel: fixtures[0], onSelect() {}, onCancel() {} });
+  p.handleInput(toggle);
+  const rows = p.render(120, theme).filter(line => line.includes('Claude Sonnet'));
+  const expectedStart = 3 + Math.max(12, ...providers.map(provider => tui.visibleWidth(`[${provider}]`)));
+  for (const row of rows) {
+    assert.equal(tui.visibleWidth(row.slice(0, row.indexOf('Claude Sonnet'))), expectedStart, 'model names must share a padded provider column');
+    assert.ok(tui.visibleWidth(row) <= 120);
+  }
+  assert.equal(rows.length, providers.length);
+  const costs = rows.map(row => tui.visibleWidth(row.slice(0, row.indexOf('$3/$15'))));
+  assert.equal(new Set(costs).size, 1, 'provider padding must preserve price alignment');
+}
 const cases = [
   ['openai/gpt-5', 'OpenAI: GPT-5', 'OpenAI'],
   ['o3', 'o3', 'OpenAI'],
@@ -74,14 +88,14 @@ for (const prefix of ['OpenAI', 'Anthropic', 'Google', 'Meta', 'DeepSeek', 'Qwen
     const p = new Picker({ allModels: [m], currentModel: m, onSelect() {}, onCancel() {} });
     assert.ok(p.render(120, theme).some(line => line.includes(label)), 'provider view keeps original label');
     p.handleInput(toggle);
-    assert.ok(p.render(120, theme).some(line => line.includes('[openrouter] Example')), `redundant maker prefix: ${label}`);
+    assert.ok(p.render(120, theme).some(line => /\[openrouter\]\s+Example/.test(line)), `redundant maker prefix: ${label}`);
     assert.equal(m.name, label, 'display cleanup must not mutate model metadata');
   }
 }
 const other = model('moonshot/kimi', 'Moonshot: Kimi');
 const otherPicker = new Picker({ allModels: [other], currentModel: other, onSelect() {}, onCancel() {} });
 otherPicker.handleInput(toggle);
-assert.ok(otherPicker.render(120, theme).some(line => line.includes('[openrouter] Moonshot: Kimi')), 'Other must retain the maker name');
+assert.ok(otherPicker.render(120, theme).some(line => /\[openrouter\]\s+Moonshot: Kimi/.test(line)), 'Other must retain the maker name');
 const models = cases.map(([id, name, , provider]) => model(id, name, provider));
 const active = models[3];
 const picked = [];
@@ -100,8 +114,8 @@ assert.equal(picker.filteredRows[picker.rowIndex], active);
 assert.equal(picker.filteredRows.length, 2, 'both providers must remain selectable');
 assert.equal(Array.from(picker.byCategory.values()).flat().length, models.length, 'no model lost');
 const rendered = picker.render(120, theme).join('\n');
-assert.ok(rendered.includes('[antigravity] Claude Sonnet'));
-assert.ok(rendered.includes('[openrouter] Claude Sonnet'));
+assert.match(rendered, /\[antigravity\]\s+Claude Sonnet/);
+assert.match(rendered, /\[openrouter\]\s+Claude Sonnet/);
 assert.ok(rendered.includes('ctrl+shift+g: makers'));
 picker.handleInput('\r');
 assert.equal(picked[0], active, 'Enter must preserve exact provider/model identity');

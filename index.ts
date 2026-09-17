@@ -360,6 +360,7 @@ class ModelPickerComponent {
 				: "  No models in this category";
 			lines.push(theme.fg("muted", msg));
 		} else {
+			const providerWidth = this.byMaker ? Math.max(12, ...visible.map((m) => visibleWidth(`[${m.provider}]`))) : 0;
 			const colW = {
 				cost: Math.max(0, ...visible.map((m) => visibleWidth(fmtCost(m.cost)))),
 				ctx: Math.max(0, ...visible.map((m) => visibleWidth(m.contextWindow ? fmtCtx(m.contextWindow) : ""))),
@@ -376,7 +377,7 @@ class ModelPickerComponent {
 				const isCurrent =
 					this.opts.currentModel?.id === model.id &&
 					this.opts.currentModel?.provider === model.provider;
-				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme, colW));
+				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme, colW, providerWidth));
 			}
 			if (rows.length > MAX_VISIBLE) {
 				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
@@ -441,6 +442,7 @@ class ModelPickerComponent {
 		width: number,
 		theme: any,
 		colW: { cost: number; ctx: number; thinking: number; vision: number },
+		providerWidth: number,
 	): string {
 		const prefix = isSelected ? "▶ " : "  ";
 		const ctxStr = model.contextWindow ? fmtCtx(model.contextWindow) : "";
@@ -458,7 +460,8 @@ class ModelPickerComponent {
 		const label = this.byMaker
 			? model.name.replace(new RegExp(`^${modelMaker(model)}:\\s*`, "i"), "")
 			: model.name;
-		const name = this.byMaker ? `[${model.provider}] ${label}` : label;
+		const tag = `[${model.provider}]`;
+		const name = this.byMaker ? `${tag}${" ".repeat(providerWidth - visibleWidth(tag) + 1)}${label}` : label;
 		const nameTrunc = truncateToWidth(name, Math.max(nameAvail, 10));
 		const gap = " ".repeat(
 			Math.max(0, width - visibleWidth(prefix + nameTrunc + curMark) - visibleWidth(right)),
