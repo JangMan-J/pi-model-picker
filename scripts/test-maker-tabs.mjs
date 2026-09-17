@@ -1,4 +1,4 @@
-// Run: node scripts/test-maker-tabs.mjs <typescript.js> <pi-tui/dist/index.js>
+// Run: node scripts/test-maker-tabs.mjs <typescript.js> <pi-tui/dist/index.js> [installed/index.ts]
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -7,7 +7,7 @@ import vm from 'node:vm';
 
 const ts = (await import(pathToFileURL(process.argv[2]))).default;
 const tui = await import(pathToFileURL(process.argv[3]));
-const source = readFileSync(new URL('../index.ts', import.meta.url), 'utf8')
+const source = readFileSync(process.argv[4] ?? new URL('../index.ts', import.meta.url), 'utf8')
   .replace(/^import .*;\n/gm, '').replace('export default function', 'function');
 let settingsText = '{}';
 let settingsExists = true;
@@ -36,10 +36,9 @@ const { Picker, maker, register, resolve } = vm.runInNewContext(
       stateText = text;
       stateWrites++;
     },
-    DynamicBorder: class { render(w) { return ['─'.repeat(w)]; } invalidate() {} },
   },
 );
-for (const [setting, fallback] of [['shortcut', 'ctrl+shift+m'], ['groupingShortcut', 'ctrl+shift+g']]) {
+for (const [setting, fallback] of [['shortcut', 'ctrl+shift+m']]) {
   for (const [value, expected] of [
     [undefined, [fallback]], [42, [fallback]], [true, [fallback]], [null, [fallback]], [{}, [fallback]],
     ['alt+g', ['alt+g']], [['alt+g', 'ctrl+shift+g', 1, ''], ['alt+g', 'ctrl+shift+g']],
@@ -57,7 +56,8 @@ for (const [setting, fallback] of [['shortcut', 'ctrl+shift+m'], ['groupingShort
   settingsExists = true;
 }
 settingsText = '{}';
-const toggle = '\x1b[103;6u'; // Kitty Ctrl+Shift+G
+const toggle = '\t';
+const nativeHint = /tab group \(providers\/makers\)/;
 const theme = { fg: (_, text) => text, bold: text => text };
 const model = (id, name, provider = 'openrouter') => ({
   id, name, provider, reasoning: true, input: ['text', 'image'],
@@ -132,9 +132,9 @@ let cancelled = false;
 const picker = new Picker({ allModels: models, currentModel: active, onSelect: m => picked.push(m), onCancel: () => { cancelled = true; } });
 assert.equal(picker.categories[0], 'antigravity');
 assert.equal(picker.filteredRows[picker.rowIndex], active);
-for (const plainCtrlG of ['\x07', '\x1b[103;5u']) {
+for (const plainCtrlG of ['\x07', '\x1b[103;5u', '\x1b[103;6u']) {
   picker.handleInput(plainCtrlG);
-  assert.equal(picker.byMaker, false, 'plain Ctrl+G must remain unbound');
+  assert.equal(picker.byMaker, false, 'Ctrl+G and Ctrl+Shift+G must remain unbound');
 }
 picker.handleInput(toggle);
 assert.equal(picker.byMaker, true);
@@ -146,7 +146,13 @@ assert.equal(Array.from(picker.byCategory.values()).flat().length, models.length
 const rendered = picker.render(120, theme).join('\n');
 assert.match(rendered, /\[antigravity\]\s+Claude Sonnet/);
 assert.match(rendered, /\[openrouter\]\s+Claude Sonnet/);
-assert.ok(rendered.includes('ctrl+shift+g: makers'));
+assert.match(rendered, nativeHint);
+const colorTheme = { fg: (color, text) => color === 'accent' ? `\x1b[33m${text}\x1b[0m` : text, bold: text => text };
+assert.equal(picker.render(120, colorTheme)[0], 'Group: providers | \x1b[33mmakers\x1b[0m');
+picker.handleInput('\x1b[Z');
+assert.equal(picker.byMaker, false, 'Shift+Tab toggles grouping too');
+assert.equal(picker.render(120, colorTheme)[0], 'Group: \x1b[33mproviders\x1b[0m | makers');
+picker.handleInput(toggle);
 picker.handleInput('\r');
 assert.equal(picked[0], active, 'Enter must preserve exact provider/model identity');
 picker.handleInput(toggle);
@@ -161,9 +167,9 @@ assert.equal(picker.categories[picker.catIndex], 'openrouter');
 assert.equal(picker.searchInput.getValue(), 'openrouter');
 picker.handleInput(toggle);
 assert.equal(picker.searchInput.getValue(), 'openrouter');
-picker.handleInput('\t');
+picker.switchCategory(1);
 assert.equal(picker.searchInput.getValue(), '', 'new tab starts with empty search');
-picker.handleInput('\x1b[Z');
+picker.switchCategory(-1);
 assert.equal(picker.searchInput.getValue(), 'openrouter', 'tab search restored');
 picker.handleInput('\x15');
 picker.handleInput('g');
@@ -177,16 +183,21 @@ assert.equal(cancelled, true);
 for (const fixtures of [models, [], [models.at(-1)]]) {
   const p = new Picker({ allModels: fixtures, currentModel: fixtures.at(-1), onSelect() {}, onCancel() {} });
   p.handleInput(toggle);
+  const category = p.catIndex;
+  p.handleInput('\x1b[C');
+  if (p.categories.length > 1) assert.notEqual(p.catIndex, category, 'right arrow changes category');
+  p.handleInput('\x1b[D');
+  assert.equal(p.catIndex, category, 'left arrow returns to the category');
   if (fixtures.length) assert.equal(p.categories.at(-1), 'Other', 'Other stays last even when active');
   for (const width of [40, 51, 60, 80, 120]) {
     for (const line of p.render(width, theme)) assert.ok(tui.visibleWidth(line) <= width, `overflow at ${width}: ${line}`);
   }
 }
 // Exercise settings through registration and the real command/input wrapper, without a model API call.
-for (const [config, expectedKeys, input, help] of [
-  [{}, ['ctrl+shift+m'], toggle, 'ctrl+shift+g: makers'],
-  [{ shortcut: ['ctrl+l', 'ctrl+l'], groupingShortcut: ['alt+g', 'ctrl+shift+g'] }, ['ctrl+l'], '\x1bg', 'alt+g/ctrl+shift+g: makers'],
-  [{ shortcut: false, groupingShortcut: false }, [], toggle, 'Grouping: providers'],
+for (const [config, expectedKeys] of [
+  [{}, ['ctrl+shift+m']],
+  [{ shortcut: ['ctrl+l', 'ctrl+l'] }, ['ctrl+l']],
+  [{ shortcut: false, groupingShortcut: false }, []], // obsolete grouping setting cannot disable Tab
 ]) {
   settingsText = JSON.stringify({ 'pi-model-picker': config });
   stateText = undefined;
@@ -200,8 +211,12 @@ for (const [config, expectedKeys, input, help] of [
     ui: { notify() {}, custom: async factory => {
       let result;
       const ui = factory({ requestRender: () => renders++ }, theme, {}, value => { result = value; });
-      ui.handleInput(input);
-      assert.ok(ui.render(140).some(line => line.includes(help)));
+      const initial = ui.render(140);
+      assert.equal(initial[0], 'Group: providers | makers', 'installed UI must start with the native-style header');
+      assert.match(initial[1], nativeHint);
+      assert.ok(!initial.some(line => /Select Model|─|ctrl\+shift\+g/.test(line)), 'no old title, bars or grouping shortcut');
+      ui.handleInput(toggle);
+      assert.match(ui.render(140).join('\n'), /\[antigravity\]\s+Claude Sonnet/);
       ui.handleInput('\r');
       return result;
     } },
@@ -232,19 +247,19 @@ async function openRemembered(handler, keys, check = () => {}) {
 }
 stateText = undefined;
 const remembered = memoryCommand(); // default true
-await openRemembered(remembered, [toggle, '\t', '\x1b']);
+await openRemembered(remembered, [toggle, '\x1b[C', '\x1b']);
 assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Google' }, 'Escape saves the visited tab');
-const checkGoogle = text => { assert.match(text, /ctrl\+shift\+g: makers/); assert.match(text, /\[antigravity\]\s+Gemini/); };
+const checkGoogle = text => { assert.match(text, nativeHint); assert.match(text, /\[antigravity\]\s+Gemini/); };
 await openRemembered(remembered, ['\x1b'], checkGoogle); // same extension instance
 await openRemembered(memoryCommand(true), ['\r'], checkGoogle); // reload/restart
 assert.equal(maker(lastSelected), 'Google');
 assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Google' }, 'Enter saves the tab too');
 stateText = JSON.stringify({ byMaker: false, category: 'openrouter' });
-await openRemembered(memoryCommand(true), ['\x1b'], text => assert.match(text, /ctrl\+shift\+g: providers/));
+await openRemembered(memoryCommand(true), ['\x1b'], text => assert.match(text, nativeHint));
 assert.deepEqual(JSON.parse(stateText), { byMaker: false, category: 'openrouter' });
 const saved = stateText;
 const counts = [stateReads, stateWrites];
-await openRemembered(memoryCommand(false), [toggle, '\x1b'], text => { assert.match(text, /ctrl\+shift\+g: providers/); assert.match(text, /▶ Claude Sonnet/); });
+await openRemembered(memoryCommand(false), [toggle, '\x1b'], text => { assert.match(text, nativeHint); assert.match(text, /▶ Claude Sonnet/); });
 assert.equal(stateText, saved, 'disabled memory must not overwrite the saved tab');
 assert.deepEqual([stateReads, stateWrites], counts, 'disabled memory must not read/write state');
 stateText = JSON.stringify({ byMaker: true, category: 'Google' });
@@ -254,7 +269,7 @@ await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, /\[an
 assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Anthropic' }, 'missing tab falls back to the active model');
 for (const invalid of [undefined, '{broken', 'null', '[]', '{"byMaker":"true","category":"Google"}']) {
   stateText = invalid;
-  await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, /ctrl\+shift\+g: providers/));
+  await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, nativeHint));
   assert.deepEqual(JSON.parse(stateText), { byMaker: false, category: 'antigravity' });
 }
 assert.equal(warnings.length, 0, 'absent/malformed state must not cause warnings');

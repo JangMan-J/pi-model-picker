@@ -2,24 +2,22 @@
 
 A categorized, keyboard-driven model selector extension for the [pi coding agent](https://github.com/badlogic/pi-mono).
 
-Instead of a flat searchable list, models are grouped by provider in horizontal tabs. Switch categories with `Tab` or arrow keys, type to filter within a category, and navigate with `↑`/`↓`.
+Models are grouped by provider or maker in horizontal tabs. Press `Tab` to switch grouping and `←`/`→` to switch categories when search is empty. Type to filter within a category and navigate with `↑`/`↓`.
 
 ## Preview
 
 ```
-╔═════════════════════════════════════════════════════════════════╗
-║  Select Model                                                   ║
-╠═════════════════════════════════════════════════════════════════╣
-║◀  Anthropic │ Google │ Cliproxyapi │ Ollama ▶                   ║
-║─────────────────────────────────────────────────────────────────║
-║  Search: claude_                                                ║
-║─────────────────────────────────────────────────────────────────║
-║▶ Claude Sonnet 4.6 ●                         200k  thinking     ║
-║  Claude Opus 4.5                             200k  thinking     ║
-║  Claude Haiku 3.5                            200k  vision       ║
-║─────────────────────────────────────────────────────────────────║
-║  ↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc     ║
-╚═════════════════════════════════════════════════════════════════╝
+Group: providers | makers
+tab group (providers/makers)
+
+  OpenAI │ Anthropic │ Google │ Meta │ Open Weights │ Other
+
+  Search: > claude_
+
+▶ [anthropic]  Claude Sonnet ●          $3/$15  200k  thinking  vision
+  [openrouter] Claude Sonnet            $3/$15  200k  thinking  vision
+
+  ↑↓ navigate  ·  ← → category  ·  enter select  ·  esc cancel
 ```
 
 - **Active model** shown with `●` and highlighted in green
@@ -78,15 +76,12 @@ By default the picker binds `Ctrl+Shift+M`. Override it in `~/.pi/agent/settings
 {
   "pi-model-picker": {
     "shortcut": "ctrl+l",
-    "groupingShortcut": "ctrl+shift+g",
     "rememberLastTab": true
   }
 }
 ```
 
-`groupingShortcut` switches between provider and maker tabs inside the picker. Its default is `Ctrl+Shift+G`.
-
-Both shortcut settings accept:
+`shortcut` accepts:
 
 - a single key string, e.g. `"ctrl+l"`
 - an array of key strings to bind multiple keys, e.g. `["ctrl+l", "ctrl+shift+m"]`
@@ -111,8 +106,7 @@ If the saved tab is unavailable, the picker uses the current model's tab.
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate models (wraps around) |
-| `Ctrl+Shift+G` | Switch between provider and maker tabs (configurable) |
-| `Tab` / `Shift+Tab` | Switch category |
+| `Tab` / `Shift+Tab` | Switch between provider and maker grouping |
 | `←` / `→` | Switch category (when search field is empty) |
 | `←` / `→` | Move cursor in search field (when field has text) |
 | Type | Filter models in the current category |

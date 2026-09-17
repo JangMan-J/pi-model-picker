@@ -3,19 +3,7 @@
  *
  * Categorized, keyboard-driven model selector with per-category search.
  *
- * Layout:
- *   ┌─────────────────────────────────────────────────┐
- *   │  Select Model                                   │
- *   ├─────────────────────────────────────────────────┤
- *   │◀  Anthropic │ Google │ OpenAI │ … ▶             │  ← Tab/Shift+Tab or ←→ at edges
- *   ├─────────────────────────────────────────────────┤
- *   │  Search: claude_                                │  ← type to filter this category
- *   ├─────────────────────────────────────────────────┤
- *   │▶ Claude Sonnet 4.6 ●            200k  thinking  │
- *   │  Claude Opus 4.5                200k  thinking  │
- *   ├─────────────────────────────────────────────────┤
- *   │  ↑↓ navigate · Tab/← → category · esc cancel   │
- *   └─────────────────────────────────────────────────┘
+ * Tab switches provider/maker grouping; arrows switch categories when search is empty.
  *
  * Usage:
  *   /models          — open the categorized picker
@@ -34,15 +22,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Input, Key, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { KeyId } from "@mariozechner/pi-tui";
 import type { Api, Model } from "@mariozechner/pi-ai";
 
 // ─── settings ───────────────────────────────────────────────────────────────
 
 const DEFAULT_SHORTCUT = "ctrl+shift+m";
-const DEFAULT_GROUPING_SHORTCUT = "ctrl+shift+g";
 
 function readSetting(setting: string): unknown {
 	try {
@@ -136,7 +122,7 @@ class ModelPickerComponent {
 	// filtered models for the current view (recomputed on query/category change)
 	private filteredRows: Model<Api>[] = [];
 
-	constructor(private opts: ModelPickerOptions, private groupingShortcuts = [DEFAULT_GROUPING_SHORTCUT]) {
+	constructor(private opts: ModelPickerOptions) {
 		this.byMaker = opts.lastTab?.byMaker ?? false;
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
@@ -246,6 +232,7 @@ class ModelPickerComponent {
 	}
 
 	private switchCategory(delta: number): void {
+		if (!this.categories.length) return;
 		// Save current search term for this category before leaving
 		this.searchTerms.set(this.searchKey(), this.searchInput.getValue());
 
@@ -274,7 +261,7 @@ class ModelPickerComponent {
 	// ── input handling ───────────────────────────────────────────────────
 
 	handleInput(data: string): void {
-		if (this.groupingShortcuts.some((key) => matchesKey(data, key as KeyId))) {
+		if (matchesKey(data, Key.tab) || matchesKey(data, Key.shift("tab"))) {
 			this.toggleGrouping();
 			return;
 		}
@@ -291,16 +278,6 @@ class ModelPickerComponent {
 				this.rowIndex === this.filteredRows.length - 1
 					? 0
 					: this.rowIndex + 1;
-			return;
-		}
-
-		// Tab / Shift+Tab — switch category
-		if (matchesKey(data, Key.tab)) {
-			this.switchCategory(1);
-			return;
-		}
-		if (matchesKey(data, Key.shift("tab"))) {
-			this.switchCategory(-1);
 			return;
 		}
 
@@ -331,20 +308,26 @@ class ModelPickerComponent {
 	// ── rendering ────────────────────────────────────────────────────────
 
 	render(width: number, theme: any): string[] {
-		const lines: string[] = [];
+		const lines: string[] = [
+			truncateToWidth(theme.fg("muted", "Group: ") +
+				theme.fg(this.byMaker ? "muted" : "accent", "providers") +
+				theme.fg("muted", " | ") +
+				theme.fg(this.byMaker ? "accent" : "muted", "makers"), width),
+			theme.fg("dim", truncateToWidth("tab group (providers/makers)", width)),
+			"",
+		];
 
 		// ── tab bar ──────────────────────────────────────────────────────
 		lines.push(this.renderTabs(width, theme));
 
 		// ── search field ─────────────────────────────────────────────────
-		lines.push(theme.fg("border", "─".repeat(width)));
+		lines.push("");
 		const prompt = theme.fg("muted", "  Search: ");
 		const promptW = visibleWidth("  Search: ");
 		const inputLines = this.searchInput.render(width - promptW);
 		lines.push(prompt + (inputLines[0] ?? ""));
 
-		// ── divider ──────────────────────────────────────────────────────
-		lines.push(theme.fg("border", "─".repeat(width)));
+		lines.push("");
 
 		// ── model list ───────────────────────────────────────────────────
 		const MAX_VISIBLE = 10;
@@ -386,8 +369,8 @@ class ModelPickerComponent {
 		}
 
 		// ── help bar ─────────────────────────────────────────────────────
-		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = `${this.groupingShortcuts.join("/") || "Grouping"}: ${this.byMaker ? "makers" : "providers"}  ·  ↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel`;
+		lines.push("");
+		const help = "↑↓ navigate  ·  ← → category  ·  enter select  ·  esc cancel";
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
 		return lines;
@@ -496,7 +479,6 @@ class ModelPickerComponent {
 // ─── extension ──────────────────────────────────────────────────────────────
 
 export default function modelPickerExtension(pi: ExtensionAPI) {
-	const groupingShortcuts = resolveShortcuts("groupingShortcut", DEFAULT_GROUPING_SHORTCUT);
 	const rememberLastTab = readSetting("rememberLastTab") !== false;
 	const statePath = join(homedir(), ".pi", "agent", "pi-model-picker-state.json");
 	async function openPicker(ctx: ExtensionContext) {
@@ -534,26 +516,20 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 				lastTab,
 				onSelect: close,
 				onCancel: () => close(null),
-			}, groupingShortcuts);
+			});
 
 			// Give the picker focus so the embedded Input gets IME cursor
 			picker.focusedState = true;
-
-
-			const footer = new DynamicBorder((s: string) => theme.fg("accent", s));
 
 			return {
 				// Implement Focusable so pi propagates focus to the Input's cursor
 				focused: true,
 
 				render(width: number): string[] {
-					return [
-								...picker.render(width, theme),
-						...footer.render(width),
-					];
+					return picker.render(width, theme);
 				},
 				invalidate() {
-						picker.invalidate();
+					picker.invalidate();
 				},
 				handleInput(data: string) {
 					picker.handleInput(data);
@@ -574,7 +550,7 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 
 	// /model is a reserved built-in — use /models instead
 	pi.registerCommand("models", {
-		description: "Select model by provider or maker (Tab switches tabs)",
+		description: "Select model by provider or maker (Tab switches grouping)",
 		handler: async (_args, ctx) => {
 			await openPicker(ctx);
 		},
