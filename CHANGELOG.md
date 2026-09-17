@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.2.0 — 2026-09-17
+
+- Show token costs and aligned model metadata in picker rows
+- Switch between provider and creator grouping with `Tab`
+- Remember the last grouping and tab while pi is running
+- Keep a fixed 10-row picker height across tabs and searches
+
 ## 1.1.0 — 2026-07-02
 
 - Keyboard shortcut is now configurable via `~/.pi/agent/settings.json` (`pi-model-picker.shortcut`)
