@@ -362,11 +362,12 @@ class ModelPickerComponent {
 					this.opts.currentModel?.provider === model.provider;
 				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme, colW, providerWidth));
 			}
-			if (rows.length > MAX_VISIBLE) {
-				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
-				lines.push(theme.fg("dim", "  " + shown));
-			}
 		}
+		// The empty-state message occupies one row; keep the count slot too.
+		for (let i = Math.max(1, visible.length); i < MAX_VISIBLE; i++) lines.push("");
+		const shown = rows.length > MAX_VISIBLE
+			? `  ${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}` : "";
+		lines.push(theme.fg("dim", shown));
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push("");

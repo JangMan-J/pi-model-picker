@@ -197,6 +197,30 @@ for (const fixtures of [models, [], [models.at(-1)]]) {
     for (const line of p.render(width, theme)) assert.ok(tui.visibleWidth(line) <= width, `overflow at ${width}: ${line}`);
   }
 }
+const manyModels = Array.from({ length: 25 }, (_, i) => model(`gpt-${i}`, `GPT ${i}`));
+for (const count of [0, 1, 8, 10, 11, 25]) {
+  const p = new Picker({ allModels: manyModels.slice(0, count), currentModel: manyModels[0], onSelect() {}, onCancel() {} });
+  for (const width of [40, 80, 120]) {
+    const lines = p.render(width, theme);
+    assert.equal(lines.length, 20, `fixed height for ${count} models at width ${width}`);
+    assert.equal(lines[17], count > 10 ? `  1–10 of ${count}` : '', 'count line has a reserved slot');
+    assert.ok(lines.slice(7 + Math.max(1, Math.min(count, 10)), 17).every(line => line === ''), 'unused model rows are blank');
+  }
+  p.handleInput('no-such-model');
+  const empty = p.render(80, theme);
+  assert.equal(empty.length, 20, 'empty search results keep the same height');
+  assert.match(empty[7], /No models match/);
+}
+const stable = new Picker({ allModels: [...manyModels, model('qwen-test', 'Qwen Test', 'groq')], currentModel: manyModels[0], onSelect() {}, onCancel() {} });
+for (let i = 0; i < 24; i++) stable.handleInput('\x1b[B');
+assert.equal(stable.render(80, theme)[17], '  16–25 of 25', 'scrolling still exposes the last model');
+for (const key of ['\x1b[C', '\x1b[D', toggle, '\x1b[C', '\x1b[D']) {
+  stable.handleInput(key);
+  const lines = stable.render(80, theme);
+  assert.equal(lines.length, 20, 'switching category/grouping preserves height');
+  assert.equal(lines[2], '─'.repeat(80));
+  assert.equal(lines[4], '─'.repeat(80));
+}
 // Exercise settings through registration and the real command/input wrapper, without a model API call.
 for (const [config, expectedKeys] of [
   [{}, ['ctrl+shift+m']],
