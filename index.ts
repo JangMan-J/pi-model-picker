@@ -19,15 +19,60 @@
  *
  * Usage:
  *   /models          — open the categorized picker
- *   Ctrl+Shift+M     — keyboard shortcut
+ *   Ctrl+Shift+M     — keyboard shortcut (default; configurable, see below)
  *
  * Note: /model is a built-in pi command and cannot be overridden.
+ *
+ * Configuring the shortcut:
+ *   Add to ~/.pi/agent/settings.json:
+ *     { "pi-model-picker": { "shortcut": "ctrl+l" } }
+ *   Accepts a string, an array of strings (binds multiple keys), or `false`
+ *   to disable the shortcut entirely (the /models command still works).
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
 import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import type { KeyId } from "@mariozechner/pi-tui";
 import type { Api, Model } from "@mariozechner/pi-ai";
+
+// ─── settings ───────────────────────────────────────────────────────────────
+
+const DEFAULT_SHORTCUT = "ctrl+shift+m";
+
+/**
+ * Resolve the keybinding(s) for the model picker shortcut.
+ *
+ * Reads `~/.pi/agent/settings.json` -> `pi-model-picker.shortcut`. Accepts:
+ *   - a string, e.g. "ctrl+l"
+ *   - an array of strings, e.g. ["ctrl+l", "ctrl+shift+m"]
+ *   - `false` or `[]` to disable the shortcut entirely
+ *
+ * Falls back to the default ("ctrl+shift+m") when unset or invalid.
+ */
+function resolveShortcuts(): string[] {
+	const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
+	if (!existsSync(settingsPath)) return [DEFAULT_SHORTCUT];
+
+	try {
+		const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
+		const config = raw["pi-model-picker"] as { shortcut?: string | string[] | false } | undefined;
+		if (!config || config.shortcut === undefined) return [DEFAULT_SHORTCUT];
+
+		const { shortcut } = config;
+		if (shortcut === false) return [];
+		if (typeof shortcut === "string") return shortcut ? [shortcut] : [];
+		if (Array.isArray(shortcut)) return shortcut.filter((s): s is string => typeof s === "string" && s.length > 0);
+
+		return [DEFAULT_SHORTCUT];
+	} catch {
+		// Malformed settings.json — fall back to default rather than crashing pi startup
+		return [DEFAULT_SHORTCUT];
+	}
+}
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -517,11 +562,21 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 		},
 	});
 
-	// Keyboard shortcut
-	pi.registerShortcut("ctrl+shift+m", {
-		description: "Open categorized model picker",
-		handler: async (ctx) => {
-			await openPicker(ctx);
-		},
-	});
+	// Keyboard shortcut(s) — configurable via settings.json ("pi-model-picker": { "shortcut": ... })
+	const shortcuts = resolveShortcuts();
+	const seen = new Set<string>();
+	for (const shortcut of shortcuts) {
+		const normalized = shortcut.toLowerCase();
+		if (seen.has(normalized)) continue;
+		seen.add(normalized);
+		// User-configured shortcuts come from settings.json as plain strings; pi validates
+		// the actual key format at registration time, so an invalid value is a no-op rather
+		// than a startup crash.
+		pi.registerShortcut(shortcut as KeyId, {
+			description: "Open categorized model picker",
+			handler: async (ctx) => {
+				await openPicker(ctx);
+			},
+		});
+	}
 }

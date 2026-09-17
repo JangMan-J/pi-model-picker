@@ -66,9 +66,31 @@ Restart pi.
 | Trigger | Description |
 |---------|-------------|
 | `/models` | Open the categorized picker |
-| `Ctrl+Shift+M` | Keyboard shortcut |
+| `Ctrl+Shift+M` | Keyboard shortcut (default, configurable) |
 
 > **Note:** `/model` is a built-in pi command and cannot be overridden. Use `/models` (with an `s`) for this picker. The built-in `/model` (flat search) continues to work as normal.
+
+### Configuring the shortcut
+
+By default the picker binds `Ctrl+Shift+M`. Override it in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "pi-model-picker": {
+    "shortcut": "ctrl+l"
+  }
+}
+```
+
+`shortcut` accepts:
+
+- a single key string, e.g. `"ctrl+l"`
+- an array of key strings to bind multiple keys, e.g. `["ctrl+l", "ctrl+shift+m"]`
+- `false` to disable the shortcut entirely (the `/models` command still works)
+
+See pi's [keybindings docs](https://github.com/badlogic/pi-mono) for the key identifier format (`ctrl`, `shift`, `alt` modifiers combined with letters, digits, or symbols).
+
+Restart pi (or run `/reload`) after changing `settings.json`.
 
 ## Controls
 
