@@ -42,35 +42,30 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 // ─── settings ───────────────────────────────────────────────────────────────
 
 const DEFAULT_SHORTCUT = "ctrl+shift+m";
+const DEFAULT_GROUPING_SHORTCUT = "ctrl+shift+g";
 
 /**
- * Resolve the keybinding(s) for the model picker shortcut.
- *
- * Reads `~/.pi/agent/settings.json` -> `pi-model-picker.shortcut`. Accepts:
- *   - a string, e.g. "ctrl+l"
- *   - an array of strings, e.g. ["ctrl+l", "ctrl+shift+m"]
- *   - `false` or `[]` to disable the shortcut entirely
- *
- * Falls back to the default ("ctrl+shift+m") when unset or invalid.
+ * Read a shortcut from `~/.pi/agent/settings.json` -> `pi-model-picker`.
+ * Accepts a string, an array of strings, or false/[] to disable.
+ * Use the supplied default when the setting is absent or has an invalid type.
  */
-function resolveShortcuts(): string[] {
+function resolveShortcuts(setting = "shortcut", fallback = DEFAULT_SHORTCUT): string[] {
 	const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
-	if (!existsSync(settingsPath)) return [DEFAULT_SHORTCUT];
+	if (!existsSync(settingsPath)) return [fallback];
 
 	try {
 		const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-		const config = raw["pi-model-picker"] as { shortcut?: string | string[] | false } | undefined;
-		if (!config || config.shortcut === undefined) return [DEFAULT_SHORTCUT];
-
-		const { shortcut } = config;
+		const config = raw["pi-model-picker"] as Record<string, unknown> | undefined;
+		const shortcut = config?.[setting];
+		if (shortcut === undefined) return [fallback];
 		if (shortcut === false) return [];
 		if (typeof shortcut === "string") return shortcut ? [shortcut] : [];
 		if (Array.isArray(shortcut)) return shortcut.filter((s): s is string => typeof s === "string" && s.length > 0);
 
-		return [DEFAULT_SHORTCUT];
+		return [fallback];
 	} catch {
 		// Malformed settings.json — fall back to default rather than crashing pi startup
-		return [DEFAULT_SHORTCUT];
+		return [fallback];
 	}
 }
 
@@ -147,7 +142,7 @@ class ModelPickerComponent {
 	// filtered models for the current view (recomputed on query/category change)
 	private filteredRows: Model<Api>[] = [];
 
-	constructor(private opts: ModelPickerOptions) {
+	constructor(private opts: ModelPickerOptions, private groupingShortcuts = [DEFAULT_GROUPING_SHORTCUT]) {
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
 
@@ -279,7 +274,7 @@ class ModelPickerComponent {
 	// ── input handling ───────────────────────────────────────────────────
 
 	handleInput(data: string): void {
-		if (matchesKey(data, Key.ctrl("g"))) {
+		if (this.groupingShortcuts.some((key) => matchesKey(data, key as KeyId))) {
 			this.toggleGrouping();
 			return;
 		}
@@ -391,7 +386,7 @@ class ModelPickerComponent {
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = `Ctrl+G: ${this.byMaker ? "makers" : "providers"}  ·  ↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel`;
+		const help = `${this.groupingShortcuts.join("/") || "Grouping"}: ${this.byMaker ? "makers" : "providers"}  ·  ↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel`;
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
 		return lines;
@@ -495,6 +490,7 @@ class ModelPickerComponent {
 // ─── extension ──────────────────────────────────────────────────────────────
 
 export default function modelPickerExtension(pi: ExtensionAPI) {
+	const groupingShortcuts = resolveShortcuts("groupingShortcut", DEFAULT_GROUPING_SHORTCUT);
 	async function openPicker(ctx: ExtensionContext) {
 		// Same logic as /model: refresh from disk, then only models with auth configured
 		ctx.modelRegistry.refresh();
@@ -511,7 +507,7 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 				currentModel: ctx.model ?? undefined,
 				onSelect: (m) => done(m),
 				onCancel: () => done(null),
-			});
+			}, groupingShortcuts);
 
 			// Give the picker focus so the embedded Input gets IME cursor
 			picker.focusedState = true;
@@ -556,7 +552,7 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 
 	// /model is a reserved built-in — use /models instead
 	pi.registerCommand("models", {
-		description: "Select model by provider or maker (Ctrl+G toggles grouping, Tab switches tabs)",
+		description: "Select model by provider or maker (Tab switches tabs)",
 		handler: async (_args, ctx) => {
 			await openPicker(ctx);
 		},

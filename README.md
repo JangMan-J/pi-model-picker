@@ -77,12 +77,15 @@ By default the picker binds `Ctrl+Shift+M`. Override it in `~/.pi/agent/settings
 ```json
 {
   "pi-model-picker": {
-    "shortcut": "ctrl+l"
+    "shortcut": "ctrl+l",
+    "groupingShortcut": "ctrl+shift+g"
   }
 }
 ```
 
-`shortcut` accepts:
+`groupingShortcut` switches between provider and maker tabs inside the picker. Its default is `Ctrl+Shift+G`.
+
+Both settings accept:
 
 - a single key string, e.g. `"ctrl+l"`
 - an array of key strings to bind multiple keys, e.g. `["ctrl+l", "ctrl+shift+m"]`
@@ -97,7 +100,8 @@ Restart pi (or run `/reload`) after changing `settings.json`.
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate models (wraps around) |
-| `Tab` / `Shift+Tab` | Switch provider category |
+| `Ctrl+Shift+G` | Switch between provider and maker tabs (configurable) |
+| `Tab` / `Shift+Tab` | Switch category |
 | `←` / `→` | Switch category (when search field is empty) |
 | `←` / `→` | Move cursor in search field (when field has text) |
 | Type | Filter models in the current category |
