@@ -11,31 +11,18 @@ const source = readFileSync(process.argv[4] ?? new URL('../index.ts', import.met
   .replace(/^import .*;\n/gm, '').replace('export default function', 'function');
 let settingsText = '{}';
 let settingsExists = true;
-let stateText;
-let stateReads = 0;
-let stateWrites = 0;
-let writeFails = false;
+const fileAccesses = [];
 const { Picker, maker, register, resolve } = vm.runInNewContext(
   ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText +
   '\n({ Picker: ModelPickerComponent, maker: modelMaker, register: modelPickerExtension, resolve: resolveShortcuts });',
   {
     ...tui, join, homedir: () => '/test-home',
     readFileSync: path => {
-      if (path.endsWith('/settings.json')) {
-        if (!settingsExists) throw new Error('missing settings');
-        return settingsText;
-      }
-      assert.equal(path, '/test-home/.pi/agent/pi-model-picker-state.json');
-      stateReads++;
-      if (stateText === undefined) throw new Error('missing state');
-      return stateText;
+      fileAccesses.push(path);
+      if (!settingsExists) throw new Error('missing settings');
+      return settingsText;
     },
-    writeFileSync: (path, text) => {
-      assert.equal(path, '/test-home/.pi/agent/pi-model-picker-state.json');
-      if (writeFails) throw new Error('permission denied');
-      stateText = text;
-      stateWrites++;
-    },
+    writeFileSync: path => fileAccesses.push(path),
   },
 );
 for (const [setting, fallback] of [['shortcut', 'ctrl+shift+m']]) {
@@ -228,7 +215,6 @@ for (const [config, expectedKeys] of [
   [{ shortcut: false, groupingShortcut: false }, []], // obsolete grouping setting cannot disable Tab
 ]) {
   settingsText = JSON.stringify({ 'pi-model-picker': config });
-  stateText = undefined;
   const commands = new Map();
   const shortcuts = new Map();
   let selected;
@@ -262,9 +248,9 @@ function memoryCommand(rememberLastTab) {
   register({ registerCommand: (name, spec) => commands.set(name, spec), registerShortcut() {}, setModel: async m => { lastSelected = m; return true; } });
   return commands.get('models').handler;
 }
-async function openRemembered(handler, keys, check = () => {}) {
+async function openRemembered(handler, keys, check = () => {}, available = models) {
   await handler('', {
-    model: active, modelRegistry: { refresh() {}, getAvailable: () => models },
+    model: active, modelRegistry: { refresh() {}, getAvailable: () => available },
     ui: { notify: (message, type) => { if (type === 'warning') warnings.push(message); }, custom: async factory => {
       let result;
       const ui = factory({ requestRender() {} }, theme, {}, value => { result = value; });
@@ -274,36 +260,24 @@ async function openRemembered(handler, keys, check = () => {}) {
     } },
   });
 }
-stateText = undefined;
-const remembered = memoryCommand(); // default true
-await openRemembered(remembered, [toggle, '\x1b[C', '\x1b']);
-assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Google' }, 'Escape saves the visited tab');
-const checkGoogle = text => { assert.match(text, nativeHint); assert.match(text, /\[antigravity\]\s+Gemini/); };
-await openRemembered(remembered, ['\x1b'], checkGoogle); // same extension instance
-await openRemembered(memoryCommand(true), ['\r'], checkGoogle); // reload/restart
-assert.equal(maker(lastSelected), 'Google');
-assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Google' }, 'Enter saves the tab too');
-stateText = JSON.stringify({ byMaker: false, category: 'openrouter' });
-await openRemembered(memoryCommand(true), ['\x1b'], text => assert.match(text, nativeHint));
-assert.deepEqual(JSON.parse(stateText), { byMaker: false, category: 'openrouter' });
-const saved = stateText;
-const counts = [stateReads, stateWrites];
-await openRemembered(memoryCommand(false), [toggle, '\x1b'], text => { assert.match(text, nativeHint); assert.match(text, /▶ Claude Sonnet/); });
-assert.equal(stateText, saved, 'disabled memory must not overwrite the saved tab');
-assert.deepEqual([stateReads, stateWrites], counts, 'disabled memory must not read/write state');
-stateText = JSON.stringify({ byMaker: true, category: 'Google' });
-await openRemembered(memoryCommand('false'), ['\x1b'], checkGoogle); // invalid flag falls back to true
-stateText = JSON.stringify({ byMaker: true, category: 'Removed tab' });
-await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, /\[antigravity\]\s+Claude Sonnet/));
-assert.deepEqual(JSON.parse(stateText), { byMaker: true, category: 'Anthropic' }, 'missing tab falls back to the active model');
-for (const invalid of [undefined, '{broken', 'null', '[]', '{"byMaker":"true","category":"Google"}']) {
-  stateText = invalid;
-  await openRemembered(memoryCommand(), ['\x1b'], text => assert.match(text, nativeHint));
-  assert.deepEqual(JSON.parse(stateText), { byMaker: false, category: 'antigravity' });
+const checkGoogle = text => assert.match(text, /\[antigravity\]\s+Gemini/);
+const checkDefault = text => { assert.match(text, /▶ Claude Sonnet/); assert.doesNotMatch(text, /\[antigravity\]/); };
+for (const flag of [undefined, true, 'false']) { // missing/invalid flags default to true
+  const remembered = memoryCommand(flag);
+  await openRemembered(remembered, [toggle, '\x1b[C', '\x1b'], checkDefault);
+  await openRemembered(remembered, ['\r'], checkGoogle); // Escape remembered the tab
+  assert.equal(maker(lastSelected), 'Google');
+  await openRemembered(remembered, ['\x1b'], checkGoogle); // Enter remembered it too
+  await openRemembered(remembered, ['\x1b'], text => assert.match(text, /\[antigravity\]\s+Claude Sonnet/), models.filter(m => maker(m) !== 'Google'));
+  await openRemembered(memoryCommand(flag), ['\x1b'], checkDefault); // reload/restart clears memory
 }
-assert.equal(warnings.length, 0, 'absent/malformed state must not cause warnings');
-writeFails = true;
-await openRemembered(memoryCommand(), ['\r']);
-assert.equal(lastSelected, active, 'state write failure must not prevent model selection');
-assert.equal(warnings.length, 1);
-console.log('PASS: tab memory across reopen/restart, Enter/Escape, disabled memory, malformed/missing state, unavailable tab, write failure; shortcuts, grouping, selection and layout.');
+const disabled = memoryCommand(false);
+await openRemembered(disabled, [toggle, '\x1b[C', '\x1b'], checkDefault);
+await openRemembered(disabled, ['\r'], checkDefault);
+assert.equal(lastSelected, active);
+const providerMemory = memoryCommand();
+await openRemembered(providerMemory, ['\x1b[C', '\x1b']);
+await openRemembered(providerMemory, ['\x1b'], text => assert.match(text, /▶ Custom alias/));
+assert.equal(warnings.length, 0);
+assert.ok(fileAccesses.every(path => path === '/test-home/.pi/agent/settings.json'), 'tab memory must not read or write a state file');
+console.log('PASS: in-memory tabs, Enter/Escape, reload reset, disabled memory, unavailable tabs, no state-file I/O; shortcuts, grouping, selection and fixed-height layout.');

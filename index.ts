@@ -18,7 +18,7 @@
  *   to disable the shortcut entirely (the /models command still works).
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -481,7 +481,7 @@ class ModelPickerComponent {
 
 export default function modelPickerExtension(pi: ExtensionAPI) {
 	const rememberLastTab = readSetting("rememberLastTab") !== false;
-	const statePath = join(homedir(), ".pi", "agent", "pi-model-picker-state.json");
+	let lastTab: ModelPickerOptions["lastTab"];
 	async function openPicker(ctx: ExtensionContext) {
 		// Same logic as /model: refresh from disk, then only models with auth configured
 		ctx.modelRegistry.refresh();
@@ -492,23 +492,9 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 			return;
 		}
 
-		let lastTab: ModelPickerOptions["lastTab"];
-		if (rememberLastTab) {
-			try {
-				const saved = JSON.parse(readFileSync(statePath, "utf-8"));
-				if (typeof saved?.byMaker === "boolean" && typeof saved?.category === "string") lastTab = saved;
-			} catch { /* No usable saved tab: use the current model. */ }
-		}
-
 		const selected = await ctx.ui.custom<Model<Api> | null>((tui, theme, _kb, done) => {
 			const close = (model: Model<Api> | null) => {
-				if (rememberLastTab) {
-					try {
-						writeFileSync(statePath, JSON.stringify(picker.getLastTab()), { mode: 0o600 });
-					} catch {
-						ctx.ui.notify("Could not save the last model tab.", "warning");
-					}
-				}
+				if (rememberLastTab) lastTab = picker.getLastTab();
 				done(model);
 			};
 			const picker = new ModelPickerComponent({

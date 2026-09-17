@@ -94,11 +94,11 @@ Restart pi (or run `/reload`) after changing `settings.json`.
 ### Last tab
 
 `rememberLastTab` accepts `true` or `false` and defaults to `true`.
-The picker saves the tab and grouping mode after selection or cancellation.
-It stores this state in `~/.pi/agent/pi-model-picker-state.json`, so the tab survives restarts.
-Search text is not saved.
+The picker remembers the tab and grouping mode after selection or cancellation.
+This state stays in memory while pi is running. Restarting pi or using `/reload` clears it.
+No state file is used. Search text is not saved.
 
-With `rememberLastTab: false`, the picker starts on the current model's provider tab and does not read or write saved state.
+With `rememberLastTab: false`, the picker always starts on the current model's provider tab.
 If the saved tab is unavailable, the picker uses the current model's tab.
 
 ## Controls
