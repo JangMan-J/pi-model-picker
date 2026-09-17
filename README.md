@@ -2,16 +2,16 @@
 
 A categorized, keyboard-driven model selector extension for the [pi coding agent](https://github.com/badlogic/pi-mono).
 
-Models are grouped by provider or maker in horizontal tabs. Press `Tab` to switch grouping and `←`/`→` to switch categories when search is empty. Type to filter within a category and navigate with `↑`/`↓`.
+Models are grouped by provider or creator in horizontal tabs. Press `Tab` to switch grouping and `←`/`→` to switch categories when search is empty. Type to filter within a category and navigate with `↑`/`↓`.
 
 ## Preview
 
 ```
-Group: providers | makers
-tab group (providers/makers)
-
+Group: providers | creators
+tab group (providers/creators)
+───────────────────────────────────────────────────────────────────
   OpenAI │ Anthropic │ Google │ Meta │ Open Weights │ Other
-
+───────────────────────────────────────────────────────────────────
   Search: > claude_
 
 ▶ [anthropic]  Claude Sonnet ●          $3/$15  200k  thinking  vision
@@ -106,7 +106,7 @@ If the saved tab is unavailable, the picker uses the current model's tab.
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate models (wraps around) |
-| `Tab` / `Shift+Tab` | Switch between provider and maker grouping |
+| `Tab` / `Shift+Tab` | Switch between provider and creator grouping |
 | `←` / `→` | Switch category (when search field is empty) |
 | `←` / `→` | Move cursor in search field (when field has text) |
 | Type | Filter models in the current category |

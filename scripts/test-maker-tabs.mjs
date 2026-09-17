@@ -57,7 +57,7 @@ for (const [setting, fallback] of [['shortcut', 'ctrl+shift+m']]) {
 }
 settingsText = '{}';
 const toggle = '\t';
-const nativeHint = /tab group \(providers\/makers\)/;
+const nativeHint = /tab group \(providers\/creators\)/;
 const theme = { fg: (_, text) => text, bold: text => text };
 const model = (id, name, provider = 'openrouter') => ({
   id, name, provider, reasoning: true, input: ['text', 'image'],
@@ -148,10 +148,14 @@ assert.match(rendered, /\[antigravity\]\s+Claude Sonnet/);
 assert.match(rendered, /\[openrouter\]\s+Claude Sonnet/);
 assert.match(rendered, nativeHint);
 const colorTheme = { fg: (color, text) => color === 'accent' ? `\x1b[33m${text}\x1b[0m` : text, bold: text => text };
-assert.equal(picker.render(120, colorTheme)[0], 'Group: providers | \x1b[33mmakers\x1b[0m');
+assert.equal(picker.render(120, colorTheme)[0], 'Group: providers | \x1b[33mcreators\x1b[0m');
+for (const width of [40, 80, 120]) {
+  const lines = picker.render(width, colorTheme);
+  for (const index of [2, 4]) assert.equal(lines[index], `\x1b[33m${'─'.repeat(width)}\x1b[0m`, 'accent rails bracket the category tabs');
+}
 picker.handleInput('\x1b[Z');
 assert.equal(picker.byMaker, false, 'Shift+Tab toggles grouping too');
-assert.equal(picker.render(120, colorTheme)[0], 'Group: \x1b[33mproviders\x1b[0m | makers');
+assert.equal(picker.render(120, colorTheme)[0], 'Group: \x1b[33mproviders\x1b[0m | creators');
 picker.handleInput(toggle);
 picker.handleInput('\r');
 assert.equal(picked[0], active, 'Enter must preserve exact provider/model identity');
@@ -212,9 +216,10 @@ for (const [config, expectedKeys] of [
       let result;
       const ui = factory({ requestRender: () => renders++ }, theme, {}, value => { result = value; });
       const initial = ui.render(140);
-      assert.equal(initial[0], 'Group: providers | makers', 'installed UI must start with the native-style header');
+      assert.equal(initial[0], 'Group: providers | creators', 'no extra rail above the native-style header');
       assert.match(initial[1], nativeHint);
-      assert.ok(!initial.some(line => /Select Model|─|ctrl\+shift\+g/.test(line)), 'no old title, bars or grouping shortcut');
+      assert.deepEqual(Array.from(initial).flatMap((line, i) => /^─+$/.test(line) ? [i] : []), [2, 4], 'only the tab rails remain');
+      assert.ok(!initial.some(line => /Select Model|makers|ctrl\+shift\+g/.test(line)), 'no old title, label or grouping shortcut');
       ui.handleInput(toggle);
       assert.match(ui.render(140).join('\n'), /\[antigravity\]\s+Claude Sonnet/);
       ui.handleInput('\r');

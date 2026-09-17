@@ -3,7 +3,7 @@
  *
  * Categorized, keyboard-driven model selector with per-category search.
  *
- * Tab switches provider/maker grouping; arrows switch categories when search is empty.
+ * Tab switches provider/creator grouping; arrows switch categories when search is empty.
  *
  * Usage:
  *   /models          — open the categorized picker
@@ -312,16 +312,16 @@ class ModelPickerComponent {
 			truncateToWidth(theme.fg("muted", "Group: ") +
 				theme.fg(this.byMaker ? "muted" : "accent", "providers") +
 				theme.fg("muted", " | ") +
-				theme.fg(this.byMaker ? "accent" : "muted", "makers"), width),
-			theme.fg("dim", truncateToWidth("tab group (providers/makers)", width)),
-			"",
+				theme.fg(this.byMaker ? "accent" : "muted", "creators"), width),
+			theme.fg("dim", truncateToWidth("tab group (providers/creators)", width)),
+			theme.fg("accent", "─".repeat(width)),
 		];
 
 		// ── tab bar ──────────────────────────────────────────────────────
 		lines.push(this.renderTabs(width, theme));
 
 		// ── search field ─────────────────────────────────────────────────
-		lines.push("");
+		lines.push(theme.fg("accent", "─".repeat(width)));
 		const prompt = theme.fg("muted", "  Search: ");
 		const promptW = visibleWidth("  Search: ");
 		const inputLines = this.searchInput.render(width - promptW);
@@ -550,7 +550,7 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 
 	// /model is a reserved built-in — use /models instead
 	pi.registerCommand("models", {
-		description: "Select model by provider or maker (Tab switches grouping)",
+		description: "Select model by provider or creator (Tab switches grouping)",
 		handler: async (_args, ctx) => {
 			await openPicker(ctx);
 		},
