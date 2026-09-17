@@ -455,7 +455,10 @@ class ModelPickerComponent {
 
 		const curMark = isCurrent ? " ●" : "";
 		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(curMark) - 2;
-		const name = this.byMaker ? `[${model.provider}] ${model.name}` : model.name;
+		const label = this.byMaker
+			? model.name.replace(new RegExp(`^${modelMaker(model)}:\\s*`, "i"), "")
+			: model.name;
+		const name = this.byMaker ? `[${model.provider}] ${label}` : label;
 		const nameTrunc = truncateToWidth(name, Math.max(nameAvail, 10));
 		const gap = " ".repeat(
 			Math.max(0, width - visibleWidth(prefix + nameTrunc + curMark) - visibleWidth(right)),

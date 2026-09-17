@@ -68,6 +68,20 @@ for (const [id, expected] of [
   ['gemini-99-new-variant', 'Google'], ['llama-99-new-variant', 'Meta'],
   ['deepseek-v99-new-variant', 'DeepSeek'], ['qwen99-new-variant', 'Qwen'],
 ]) assert.equal(maker(model(`accounts/fireworks/models/${id}`, 'Custom alias')), expected);
+for (const prefix of ['OpenAI', 'Anthropic', 'Google', 'Meta', 'DeepSeek', 'Qwen']) {
+  for (const label of [`${prefix}: Example`, `${prefix.toLowerCase()}:Example`]) {
+    const m = Object.freeze(model('example', label));
+    const p = new Picker({ allModels: [m], currentModel: m, onSelect() {}, onCancel() {} });
+    assert.ok(p.render(120, theme).some(line => line.includes(label)), 'provider view keeps original label');
+    p.handleInput(toggle);
+    assert.ok(p.render(120, theme).some(line => line.includes('[openrouter] Example')), `redundant maker prefix: ${label}`);
+    assert.equal(m.name, label, 'display cleanup must not mutate model metadata');
+  }
+}
+const other = model('moonshot/kimi', 'Moonshot: Kimi');
+const otherPicker = new Picker({ allModels: [other], currentModel: other, onSelect() {}, onCancel() {} });
+otherPicker.handleInput(toggle);
+assert.ok(otherPicker.render(120, theme).some(line => line.includes('[openrouter] Moonshot: Kimi')), 'Other must retain the maker name');
 const models = cases.map(([id, name, , provider]) => model(id, name, provider));
 const active = models[3];
 const picked = [];
