@@ -35,7 +35,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { KeyId } from "@mariozechner/pi-tui";
 import type { Api, Model } from "@mariozechner/pi-ai";
 
@@ -539,9 +539,6 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 			// Give the picker focus so the embedded Input gets IME cursor
 			picker.focusedState = true;
 
-			const header = new Container();
-			header.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-			header.addChild(new Text(theme.fg("accent", theme.bold("  Select Model")), 0, 0));
 
 			const footer = new DynamicBorder((s: string) => theme.fg("accent", s));
 
@@ -551,14 +548,12 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 
 				render(width: number): string[] {
 					return [
-						...header.render(width),
-						...picker.render(width, theme),
+								...picker.render(width, theme),
 						...footer.render(width),
 					];
 				},
 				invalidate() {
-					header.invalidate();
-					picker.invalidate();
+						picker.invalidate();
 				},
 				handleInput(data: string) {
 					picker.handleInput(data);
