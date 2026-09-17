@@ -96,9 +96,9 @@ for (const prefix of ['DeepSeek', 'Qwen']) {
   const m = model('example', `${prefix}: Example`);
   const p = new Picker({ allModels: [m], currentModel: m, onSelect() {}, onCancel() {} });
   p.handleInput(toggle);
-  assert.deepEqual(Array.from(p.categories), ['Open Wts']);
+  assert.deepEqual(Array.from(p.categories), ['Open Weights']);
   assert.equal(p.filteredRows[p.rowIndex], m);
-  assert.ok(p.render(120, theme).some(line => line.includes(`${prefix}: Example`)), 'Open Wts keeps the maker name');
+  assert.ok(p.render(120, theme).some(line => line.includes(`${prefix}: Example`)), 'Open Weights keeps the maker name');
   p.handleInput(toggle);
   assert.equal(p.filteredRows[p.rowIndex], m, 'toggle back preserves selection');
 }
@@ -119,8 +119,8 @@ for (const plainCtrlG of ['\x07', '\x1b[103;5u']) {
 }
 picker.handleInput(toggle);
 assert.equal(picker.byMaker, true);
-assert.deepEqual(Array.from(picker.categories), ['OpenAI', 'Anthropic', 'Google', 'Meta', 'Open Wts', 'Other']);
-assert.equal(picker.byCategory.get('Open Wts').length, 3, 'DeepSeek and Qwen models share one tab');
+assert.deepEqual(Array.from(picker.categories), ['OpenAI', 'Anthropic', 'Google', 'Meta', 'Open Weights', 'Other']);
+assert.equal(picker.byCategory.get('Open Weights').length, 3, 'DeepSeek and Qwen models share one tab');
 assert.equal(picker.filteredRows[picker.rowIndex], active);
 assert.equal(picker.filteredRows.length, 2, 'both providers must remain selectable');
 assert.equal(Array.from(picker.byCategory.values()).flat().length, models.length, 'no model lost');

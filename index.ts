@@ -183,7 +183,7 @@ class ModelPickerComponent {
 	private categoryFor(model: Model<Api>): string {
 		if (!this.byMaker) return model.provider;
 		const maker = modelMaker(model);
-		return ["DeepSeek", "Qwen"].includes(maker) ? "Open Wts" : maker;
+		return ["DeepSeek", "Qwen"].includes(maker) ? "Open Weights" : maker;
 	}
 
 	private buildCategories(): Map<string, Model<Api>[]> {
@@ -207,7 +207,7 @@ class ModelPickerComponent {
 		}
 
 		if (this.byMaker) {
-			return new Map(["OpenAI", "Anthropic", "Google", "Meta", "Open Wts", "Other"]
+			return new Map(["OpenAI", "Anthropic", "Google", "Meta", "Open Weights", "Other"]
 				.filter((key) => map.has(key)).map((key) => [key, map.get(key)!]));
 		}
 
