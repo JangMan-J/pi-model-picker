@@ -54,6 +54,24 @@ function fmtCost(cost: { input: number; output: number }): string {
 	return rates.map((n) => `$${fmt(n)}`).join("/");
 }
 
+const MAKERS: Record<string, RegExp> = {
+	OpenAI: /^(?:openai\b|gpt[-\s]|chatgpt\b|o[134](?:[-\s]|$))/i,
+	Anthropic: /^(?:anthropic\b|claude\b)/i,
+	Google: /^(?:google\b|gemini\b|gemma\b)/i,
+	Meta: /^(?:meta\b|llama\b)/i,
+	DeepSeek: /^deepseek\b/i,
+	Qwen: /^(?:qwen(?:\b|\d)|qwq\b)/i,
+};
+
+function modelMaker(model: Model<Api>): string {
+	// ponytail: name/ID heuristic; add aliases here when a maker uses new branding.
+	for (const text of [model.name, model.id.replace(/^hf:/i, ""), model.id.split("/").pop()!]) {
+		const maker = Object.entries(MAKERS).find(([, pattern]) => pattern.test(text));
+		if (maker) return maker[0];
+	}
+	return "Other";
+}
+
 // ─── component ──────────────────────────────────────────────────────────────
 
 interface ModelPickerOptions {
@@ -70,6 +88,7 @@ class ModelPickerComponent {
 	private categories: string[];
 	private catIndex: number;
 	private rowIndex = 0;
+	private byMaker = false;
 
 	// per-category source models (sorted, never mutated)
 	private byCategory: Map<string, Model<Api>[]>;
@@ -121,11 +140,16 @@ class ModelPickerComponent {
 
 	// ── category building ────────────────────────────────────────────────
 
+	private categoryFor(model: Model<Api>): string {
+		return this.byMaker ? modelMaker(model) : model.provider;
+	}
+
 	private buildCategories(): Map<string, Model<Api>[]> {
 		const map = new Map<string, Model<Api>[]>();
 		for (const m of this.opts.allModels) {
-			if (!map.has(m.provider)) map.set(m.provider, []);
-			map.get(m.provider)!.push(m);
+			const key = this.categoryFor(m);
+			if (!map.has(key)) map.set(key, []);
+			map.get(key)!.push(m);
 		}
 
 		const cur = this.opts.currentModel;
@@ -136,8 +160,13 @@ class ModelPickerComponent {
 				const aCur = cur && a.id === cur.id && a.provider === cur.provider ? -1 : 0;
 				const bCur = cur && b.id === cur.id && b.provider === cur.provider ? -1 : 0;
 				if (aCur !== bCur) return aCur - bCur;
-				return a.name.localeCompare(b.name);
+				return a.name.localeCompare(b.name) || a.provider.localeCompare(b.provider);
 			});
+		}
+
+		if (this.byMaker) {
+			return new Map([...Object.keys(MAKERS), "Other"]
+				.filter((key) => map.has(key)).map((key) => [key, map.get(key)!]));
 		}
 
 		// Sort categories: active provider first, then alphabetical
@@ -153,10 +182,14 @@ class ModelPickerComponent {
 
 	// ── filtering ────────────────────────────────────────────────────────
 
+	private searchKey(): string {
+		return `${this.byMaker}:${this.categories[this.catIndex] ?? ""}`;
+	}
+
 	private applyFilter(): void {
 		const catKey = this.categories[this.catIndex] ?? "";
 		const source = this.byCategory.get(catKey) ?? [];
-		const query = (this.searchTerms.get(catKey) ?? "").toLowerCase().trim();
+		const query = (this.searchTerms.get(this.searchKey()) ?? "").toLowerCase().trim();
 
 		if (!query) {
 			this.filteredRows = source;
@@ -164,7 +197,8 @@ class ModelPickerComponent {
 			this.filteredRows = source.filter(
 				(m) =>
 					m.name.toLowerCase().includes(query) ||
-					m.id.toLowerCase().includes(query),
+					m.id.toLowerCase().includes(query) ||
+					m.provider.toLowerCase().includes(query),
 			);
 		}
 		// Clamp row selection
@@ -173,24 +207,37 @@ class ModelPickerComponent {
 
 	private switchCategory(delta: number): void {
 		// Save current search term for this category before leaving
-		const oldKey = this.categories[this.catIndex] ?? "";
-		this.searchTerms.set(oldKey, this.searchInput.getValue());
+		this.searchTerms.set(this.searchKey(), this.searchInput.getValue());
 
 		this.catIndex =
 			(this.catIndex + delta + this.categories.length) % this.categories.length;
 
 		// Restore search term for new category
-		const newKey = this.categories[this.catIndex] ?? "";
-		const saved = this.searchTerms.get(newKey) ?? "";
+		const saved = this.searchTerms.get(this.searchKey()) ?? "";
 		this.searchInput.setValue(saved);
 
 		this.rowIndex = 0;
 		this.applyFilter();
 	}
 
+	private toggleGrouping(): void {
+		const selected = this.filteredRows[this.rowIndex] ?? this.opts.currentModel;
+		this.byMaker = !this.byMaker;
+		this.byCategory = this.buildCategories();
+		this.categories = Array.from(this.byCategory.keys());
+		this.catIndex = Math.max(0, this.categories.indexOf(selected ? this.categoryFor(selected) : ""));
+		this.searchTerms.set(this.searchKey(), this.searchInput.getValue());
+		this.applyFilter();
+		this.rowIndex = Math.max(0, this.filteredRows.indexOf(selected!));
+	}
+
 	// ── input handling ───────────────────────────────────────────────────
 
 	handleInput(data: string): void {
+		if (matchesKey(data, Key.ctrl("g"))) {
+			this.toggleGrouping();
+			return;
+		}
 		// ↑ / ↓ — navigate the list with wraparound
 		if (matchesKey(data, Key.up)) {
 			this.rowIndex =
@@ -235,8 +282,7 @@ class ModelPickerComponent {
 
 		if (before !== after) {
 			// Update stored term and refilter
-			const catKey = this.categories[this.catIndex] ?? "";
-			this.searchTerms.set(catKey, after);
+			this.searchTerms.set(this.searchKey(), after);
 			this.rowIndex = 0;
 			this.applyFilter();
 		}
@@ -300,7 +346,7 @@ class ModelPickerComponent {
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = "↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel";
+		const help = `Ctrl+G: ${this.byMaker ? "makers" : "providers"}  ·  ↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel`;
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
 		return lines;
@@ -308,6 +354,7 @@ class ModelPickerComponent {
 
 	private renderTabs(width: number, theme: any): string {
 		const total = this.categories.length;
+		if (!total) return "";
 		const active = this.catIndex;
 		const ARROW_W = 4; // "◀ " + " ▶"
 		const SEP_W = 1;   // "│"
@@ -368,7 +415,8 @@ class ModelPickerComponent {
 
 		const curMark = isCurrent ? " ●" : "";
 		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(curMark) - 2;
-		const nameTrunc = truncateToWidth(model.name, Math.max(nameAvail, 10));
+		const name = this.byMaker ? `[${model.provider}] ${model.name}` : model.name;
+		const nameTrunc = truncateToWidth(name, Math.max(nameAvail, 10));
 		const gap = " ".repeat(
 			Math.max(0, width - visibleWidth(prefix + nameTrunc + curMark) - visibleWidth(right)),
 		);
@@ -457,13 +505,13 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 		if (!success) {
 			ctx.ui.notify(`No API key for ${selected.provider}/${selected.id}`, "error");
 		} else {
-			ctx.ui.notify(`Model: ${selected.name}`, "success");
+			ctx.ui.notify(`Model: ${selected.name}`, "info");
 		}
 	}
 
 	// /model is a reserved built-in — use /models instead
 	pi.registerCommand("models", {
-		description: "Select model by provider category with search (Tab/← → switch, ↑↓ navigate)",
+		description: "Select model by provider or maker (Ctrl+G toggles grouping, Tab switches tabs)",
 		handler: async (_args, ctx) => {
 			await openPicker(ctx);
 		},
