@@ -64,6 +64,24 @@ for (const providers of [['groq', 'openrouter'], ['groq', 'fireworks-dedicated',
   const costs = rows.map(row => tui.visibleWidth(row.slice(0, row.indexOf('$3/$15'))));
   assert.equal(new Set(costs).size, 1, 'provider padding must preserve price alignment');
 }
+const k3Customs = [
+  model('accounts/fireworks/models/kimi-k3', 'Kimi K3 (capped: thinking level = hard reasoning-token budget)', 'k3-capped'),
+  model('accounts/fireworks/routers/kimi-k3-fast', 'Kimi K3 Fast (capped)', 'k3-capped'),
+  model('accounts/fireworks/models/kimi-k3', 'Kimi K3 (lean: low tier + 4096 cap, fixed)', 'k3-lean'),
+  model('accounts/fireworks/routers/kimi-k3-fast', 'Kimi K3 Fast (lean)', 'k3-lean'),
+];
+const k3Picked = [];
+const k3Picker = new Picker({ allModels: k3Customs, currentModel: k3Customs[0], onSelect: m => k3Picked.push(m), onCancel() {} });
+assert.deepEqual(Array.from(k3Picker.categories), ['k3-lean'], 'lean and capped variants share one provider tab');
+assert.equal(k3Picker.filteredRows.length, 4, 'duplicate wire IDs remain distinct by provider');
+const k3Rendered = k3Picker.render(120, theme).join('\n');
+assert.match(k3Rendered, /Kimi K3 \(capped: thinking level = hard reasoning-token budget\)/);
+assert.match(k3Rendered, /Kimi K3 Fast \(capped\)/);
+assert.match(k3Rendered, /Kimi K3 \(lean: low tier \+ 4096 cap, fixed\)/);
+assert.match(k3Rendered, /Kimi K3 Fast \(lean\)/);
+k3Picker.handleInput('\r');
+assert.equal(k3Picked[0], k3Customs[0], 'merged tab preserves exact provider/model identity');
+assert.ok(k3Picker.renderTabs(80, theme).includes('K3-Lean'));
 const cases = [
   ['openai/gpt-5', 'OpenAI: GPT-5', 'OpenAI'],
   ['o3', 'o3', 'OpenAI'],

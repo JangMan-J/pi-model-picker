@@ -55,7 +55,7 @@ function providerLabel(id: string): string {
 	return id
 		.split("-")
 		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-		.join(" ");
+		.join(/^[a-z]\d+-/i.test(id) ? "-" : " ");
 }
 
 /** Format context window as human-readable */
@@ -165,7 +165,7 @@ class ModelPickerComponent {
 	// ── category building ────────────────────────────────────────────────
 
 	private categoryFor(model: Model<Api>): string {
-		if (!this.byMaker) return model.provider;
+		if (!this.byMaker) return ["k3-capped", "k3-lean"].includes(model.provider) ? "k3-lean" : model.provider;
 		const maker = modelMaker(model);
 		return ["DeepSeek", "Qwen"].includes(maker) ? "Open Weights" : maker;
 	}
