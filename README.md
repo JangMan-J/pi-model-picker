@@ -28,6 +28,7 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 - **Search** filters by model name or id within the current category
 - **Search term preserved** per category — switch away and back, your query is still there
 - **Wraparound navigation** — `↑` on the first item jumps to the last, and vice versa
+- **Startup default** — selecting a model saves its provider and ID to pi's global `settings.json`
 
 ## Install
 
@@ -101,7 +102,7 @@ Restart pi (or run `/reload`) after changing `settings.json`.
 | `←` / `→` | Switch category (when search field is empty) |
 | `←` / `→` | Move cursor in search field (when field has text) |
 | Type | Filter models in the current category |
-| `Enter` | Select highlighted model |
+| `Enter` | Select highlighted model and save it as the startup default |
 | `Esc` | Cancel |
 
 ## How it works

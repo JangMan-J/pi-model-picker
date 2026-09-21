@@ -30,7 +30,7 @@
  *   to disable the shortcut entirely (the /models command still works).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
@@ -43,6 +43,34 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 
 const DEFAULT_SHORTCUT = "ctrl+shift+m";
 
+function getSettingsPath(): string {
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	return join(agentDir, "settings.json");
+}
+
+/** Persist the selected model as pi's startup default. */
+function persistDefaultModel(model: Model<Api>): void {
+	const settingsPath = getSettingsPath();
+	const settingsDir = join(settingsPath, "..");
+	let settings: Record<string, unknown> = {};
+
+	if (existsSync(settingsPath)) {
+		const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			throw new Error("settings.json must contain a JSON object");
+		}
+		settings = parsed as Record<string, unknown>;
+	}
+
+	settings.defaultProvider = model.provider;
+	settings.defaultModel = model.id;
+	mkdirSync(settingsDir, { recursive: true });
+
+	const temporaryPath = `${settingsPath}.${process.pid}.tmp`;
+	writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
+	renameSync(temporaryPath, settingsPath);
+}
+
 /**
  * Resolve the keybinding(s) for the model picker shortcut.
  *
@@ -54,7 +82,7 @@ const DEFAULT_SHORTCUT = "ctrl+shift+m";
  * Falls back to the default ("ctrl+shift+m") when unset or invalid.
  */
 function resolveShortcuts(): string[] {
-	const settingsPath = join(homedir(), ".pi", "agent", "settings.json");
+	const settingsPath = getSettingsPath();
 	if (!existsSync(settingsPath)) return [DEFAULT_SHORTCUT];
 
 	try {
@@ -479,8 +507,15 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 		const success = await pi.setModel(selected);
 		if (!success) {
 			ctx.ui.notify(`No API key for ${selected.provider}/${selected.id}`, "error");
-		} else {
-			ctx.ui.notify(`Model: ${selected.name}`, "success");
+			return;
+		}
+
+		try {
+			persistDefaultModel(selected);
+			ctx.ui.notify(`Model: ${selected.name} (saved as startup default)`, "info");
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			ctx.ui.notify(`Model changed, but could not save startup default: ${message}`, "error");
 		}
 	}
 
