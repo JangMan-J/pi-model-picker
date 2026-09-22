@@ -50,7 +50,11 @@ function fmtCtx(tokens: number): string {
 function fmtCost(cost: { input: number; output: number }): string {
 	const rates = [cost?.input, cost?.output];
 	if (!rates.every((n) => Number.isFinite(n) && n >= 0) || !rates.some((n) => n > 0)) return "";
-	const fmt = (n: number) => (n === 0 ? "0" : n < 1 ? n.toFixed(2) : n.toFixed(2).replace(/\.?0+$/, ""));
+	const fmt = (n: number) =>
+		n === 0 ? "0"
+		: n < 0.01 ? String(Number(n.toPrecision(2))) // keep sub-cent rates non-zero
+		: n < 1 ? n.toFixed(2)
+		: n.toFixed(2).replace(/\.?0+$/, "");
 	return rates.map((n) => `$${fmt(n)}`).join("/");
 }
 
@@ -280,9 +284,13 @@ class ModelPickerComponent {
 				thinking: visible.some((m) => m.reasoning) ? "thinking".length : 0,
 				vision: visible.some((m) => m.input.includes("image")) ? "vision".length : 0,
 			};
-			const infoWidth = Object.values(colW).filter(Boolean).reduce((sum, n) => sum + n + 2, -2);
-			// Reserve 10 name columns plus the cursor, current-model mark, and gap.
-			if (infoWidth + 16 > width) colW.cost = 0;
+			const infoWidth = () => Object.values(colW).filter(Boolean).reduce((sum, n) => sum + n + 2, -2);
+			// Reserve 10 name columns plus the cursor, current-model mark, and gap;
+			// drop optional columns, least essential first, until the row fits.
+			for (const key of ["cost", "vision", "thinking", "ctx"] as const) {
+				if (infoWidth() + 16 <= width) break;
+				colW[key] = 0;
+			}
 			for (let i = 0; i < visible.length; i++) {
 				const model = visible[i]!;
 				const absIdx = start + i;
@@ -361,9 +369,9 @@ class ModelPickerComponent {
 		// Pad blank cells too, so missing values cannot shift the other columns.
 		const right = [
 			colW.cost ? costStr.padStart(colW.cost) : "",
-			ctxStr.padStart(colW.ctx),
-			(model.reasoning ? "thinking" : "").padEnd(colW.thinking),
-			(model.input.includes("image") ? "vision" : "").padEnd(colW.vision),
+			colW.ctx ? ctxStr.padStart(colW.ctx) : "",
+			colW.thinking ? (model.reasoning ? "thinking" : "").padEnd(colW.thinking) : "",
+			colW.vision ? (model.input.includes("image") ? "vision" : "").padEnd(colW.vision) : "",
 		].filter(Boolean).join("  ");
 
 		const curMark = isCurrent ? " ●" : "";
