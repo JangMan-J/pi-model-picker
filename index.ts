@@ -119,6 +119,18 @@ function fmtCtx(tokens: number): string {
 	return String(tokens);
 }
 
+/** Format per-million-token cost as "$in/$out"; omit invalid or all-zero rates. */
+function fmtCost(cost: { input: number; output: number }): string {
+	const rates = [cost?.input, cost?.output];
+	if (!rates.every((n) => Number.isFinite(n) && n >= 0) || !rates.some((n) => n > 0)) return "";
+	const fmt = (n: number) =>
+		n === 0 ? "0"
+		: n < 0.01 ? String(Number(n.toPrecision(2))) // keep sub-cent rates non-zero
+		: n < 1 ? n.toFixed(2)
+		: n.toFixed(2).replace(/\.?0+$/, "");
+	return rates.map((n) => `$${fmt(n)}`).join("/");
+}
+
 // ─── component ──────────────────────────────────────────────────────────────
 
 interface ModelPickerOptions {
@@ -339,6 +351,19 @@ class ModelPickerComponent {
 				: "  No models in this category";
 			lines.push(theme.fg("muted", msg));
 		} else {
+			const colW = {
+				cost: Math.max(0, ...visible.map((m) => visibleWidth(fmtCost(m.cost)))),
+				ctx: Math.max(0, ...visible.map((m) => visibleWidth(m.contextWindow ? fmtCtx(m.contextWindow) : ""))),
+				thinking: visible.some((m) => m.reasoning) ? "thinking".length : 0,
+				vision: visible.some((m) => m.input.includes("image")) ? "vision".length : 0,
+			};
+			const infoWidth = () => Object.values(colW).filter(Boolean).reduce((sum, n) => sum + n + 2, -2);
+			// Reserve 10 name columns plus the cursor, current-model mark, and gap;
+			// drop optional columns, least essential first, until the row fits.
+			for (const key of ["cost", "vision", "thinking", "ctx"] as const) {
+				if (infoWidth() + 16 <= width) break;
+				colW[key] = 0;
+			}
 			for (let i = 0; i < visible.length; i++) {
 				const model = visible[i]!;
 				const absIdx = start + i;
@@ -346,7 +371,7 @@ class ModelPickerComponent {
 				const isCurrent =
 					this.opts.currentModel?.id === model.id &&
 					this.opts.currentModel?.provider === model.provider;
-				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme));
+				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme, colW));
 			}
 			if (rows.length > MAX_VISIBLE) {
 				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
@@ -409,13 +434,18 @@ class ModelPickerComponent {
 		isCurrent: boolean,
 		width: number,
 		theme: any,
+		colW: { cost: number; ctx: number; thinking: number; vision: number },
 	): string {
 		const prefix = isSelected ? "▶ " : "  ";
-		const ctxStr = fmtCtx(model.contextWindow);
-		const tags: string[] = [];
-		if (model.reasoning) tags.push("thinking");
-		if (model.input.includes("image")) tags.push("vision");
-		const right = `${ctxStr}  ${tags.join(" ")}`;
+		const ctxStr = model.contextWindow ? fmtCtx(model.contextWindow) : "";
+		const costStr = fmtCost(model.cost);
+		// Pad blank cells too, so missing values cannot shift the other columns.
+		const right = [
+			colW.cost ? costStr.padStart(colW.cost) : "",
+			colW.ctx ? ctxStr.padStart(colW.ctx) : "",
+			colW.thinking ? (model.reasoning ? "thinking" : "").padEnd(colW.thinking) : "",
+			colW.vision ? (model.input.includes("image") ? "vision" : "").padEnd(colW.vision) : "",
+		].filter(Boolean).join("  ");
 
 		const curMark = isCurrent ? " ●" : "";
 		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(curMark) - 2;
