@@ -1,1 +1,6 @@
 node_modules/
+/.pi/
+/scripts/test-fuzzy-search.mjs
+/scripts/test-install.mjs
+/scripts/test-provider-tabs.mjs
+/scripts/test-save-default.mjs
