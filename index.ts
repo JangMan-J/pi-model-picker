@@ -3,19 +3,7 @@
  *
  * Categorized, keyboard-driven model selector with per-category search.
  *
- * Layout:
- *   ┌─────────────────────────────────────────────────┐
- *   │  Select Model                                   │
- *   ├─────────────────────────────────────────────────┤
- *   │◀  Anthropic │ Google │ OpenAI │ … ▶             │  ← Tab/Shift+Tab or ←→ at edges
- *   ├─────────────────────────────────────────────────┤
- *   │  Search: claude_                                │  ← type to filter this category
- *   ├─────────────────────────────────────────────────┤
- *   │▶ Claude Sonnet 4.6 ●            200k  thinking  │
- *   │  Claude Opus 4.5                200k  thinking  │
- *   ├─────────────────────────────────────────────────┤
- *   │  ↑↓ navigate · Tab/← → category · esc cancel   │
- *   └─────────────────────────────────────────────────┘
+ * Tab/Shift+Tab switch provider categories.
  *
  * Usage:
  *   /models          — open the categorized picker
@@ -30,11 +18,11 @@
  *   to disable the shortcut entirely (the /models command still works).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder, getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
-import { Container, Input, Key, Text, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { Input, Key, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { KeyId } from "@mariozechner/pi-tui";
 import type { Api, Model } from "@mariozechner/pi-ai";
 
@@ -42,55 +30,22 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 
 const DEFAULT_SHORTCUT = "ctrl+shift+m";
 
-function getSettingsPath(): string {
-	return join(getAgentDir(), "settings.json");
-}
-
-/** Persist the selected model as pi's startup default. */
-async function persistDefaultModel(model: Model<Api>, ctx: ExtensionContext): Promise<void> {
-	const settings = SettingsManager.create(ctx.cwd);
-	settings.setDefaultModelAndProvider(model.provider, model.id);
-	// Like /model: startup ignores a default outside a non-empty enabledModels scope, so add it.
-	const ref = `${model.provider}/${model.id}`;
-	const enabled = settings.getEnabledModels();
-	const inScope = (ctx.scopedModels ?? []).some((scoped) => scoped.model.provider === model.provider && scoped.model.id === model.id);
-	if (enabled?.length && !inScope && !enabled.some((pattern) => pattern.toLowerCase() === ref.toLowerCase())) {
-		settings.setEnabledModels([...enabled, ref]);
-	}
-	await settings.flush();
-	const error = settings.drainErrors().find((entry) => entry.scope === "global");
-	if (error) throw error.error;
-}
-
-/**
- * Resolve the keybinding(s) for the model picker shortcut.
- *
- * Reads `~/.pi/agent/settings.json` -> `pi-model-picker.shortcut`. Accepts:
- *   - a string, e.g. "ctrl+l"
- *   - an array of strings, e.g. ["ctrl+l", "ctrl+shift+m"]
- *   - `false` or `[]` to disable the shortcut entirely
- *
- * Falls back to the default ("ctrl+shift+m") when unset or invalid.
- */
-function resolveShortcuts(): string[] {
-	const settingsPath = getSettingsPath();
-	if (!existsSync(settingsPath)) return [DEFAULT_SHORTCUT];
-
+function readSetting(setting: string): unknown {
 	try {
-		const raw = JSON.parse(readFileSync(settingsPath, "utf-8")) as Record<string, unknown>;
-		const config = raw["pi-model-picker"] as { shortcut?: string | string[] | false } | undefined;
-		if (!config || config.shortcut === undefined) return [DEFAULT_SHORTCUT];
-
-		const { shortcut } = config;
-		if (shortcut === false) return [];
-		if (typeof shortcut === "string") return shortcut ? [shortcut] : [];
-		if (Array.isArray(shortcut)) return shortcut.filter((s): s is string => typeof s === "string" && s.length > 0);
-
-		return [DEFAULT_SHORTCUT];
+		const raw = JSON.parse(readFileSync(join(getAgentDir(), "settings.json"), "utf-8"));
+		return raw?.["pi-model-picker"]?.[setting];
 	} catch {
-		// Malformed settings.json — fall back to default rather than crashing pi startup
-		return [DEFAULT_SHORTCUT];
+		return undefined; // Missing or malformed settings use defaults.
 	}
+}
+
+/** Accept a key, multiple keys, or false/[] to disable. */
+function resolveShortcuts(setting = "shortcut", fallback = DEFAULT_SHORTCUT): string[] {
+	const shortcut = readSetting(setting);
+	if (shortcut === false) return [];
+	if (typeof shortcut === "string") return shortcut ? [shortcut] : [];
+	if (Array.isArray(shortcut)) return shortcut.filter((s): s is string => typeof s === "string" && s.length > 0);
+	return [fallback];
 }
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -175,7 +130,7 @@ class ModelPickerComponent {
 		this.byCategory = this.buildCategories();
 		this.categories = Array.from(this.byCategory.keys());
 
-		// Start on the category of the current model
+		// Restore the saved tab if available, otherwise follow the current model.
 		const cur = opts.currentModel;
 		const startCat = opts.lastTab && this.byCategory.has(opts.lastTab)
 			? opts.lastTab : cur?.provider ?? this.categories[0];
@@ -200,7 +155,7 @@ class ModelPickerComponent {
 		}
 	}
 
-	getLastTab(): string {
+	getLastTab() {
 		return this.categories[this.catIndex] ?? "";
 	}
 
@@ -244,6 +199,10 @@ class ModelPickerComponent {
 
 	// ── filtering ────────────────────────────────────────────────────────
 
+	private searchKey(): string {
+		return this.categories[this.catIndex] ?? "";
+	}
+
 	private applyFilter(): void {
 		const catKey = this.categories[this.catIndex] ?? "";
 		const source = this.fuzzy ? [...this.byCategory.values()].flat() : this.byCategory.get(catKey) ?? [];
@@ -277,15 +236,13 @@ class ModelPickerComponent {
 			return;
 		}
 		// Save current search term for this category before leaving
-		const oldKey = this.categories[this.catIndex] ?? "";
-		this.searchTerms.set(oldKey, this.searchInput.getValue());
+		this.searchTerms.set(this.searchKey(), this.searchInput.getValue());
 
 		this.catIndex =
 			(this.catIndex + delta + this.categories.length) % this.categories.length;
 
 		// Restore search term for new category
-		const newKey = this.categories[this.catIndex] ?? "";
-		const saved = this.searchTerms.get(newKey) ?? "";
+		const saved = this.searchTerms.get(this.searchKey()) ?? "";
 		this.searchInput.setValue(saved);
 
 		this.rowIndex = 0;
@@ -297,11 +254,20 @@ class ModelPickerComponent {
 	handleInput(data: string): void {
 		if (matchesKey(data, Key.ctrl("f"))) {
 			this.fuzzy = !this.fuzzy;
-			if (!this.fuzzy) this.searchTerms.set(this.getLastTab(), this.searchInput.getValue());
+			if (!this.fuzzy) this.searchTerms.set(this.searchKey(), this.searchInput.getValue());
 			this.rowIndex = 0;
 			this.applyFilter();
 			return;
 		}
+		if (matchesKey(data, Key.tab)) {
+			this.switchCategory(1);
+			return;
+		}
+		if (matchesKey(data, Key.shift("tab"))) {
+			this.switchCategory(-1);
+			return;
+		}
+		// Shift+↑ / ↓ — skip ten rows without wrapping
 		if (matchesKey(data, Key.shift("up"))) {
 			this.rowIndex = Math.max(0, this.rowIndex - 10);
 			return;
@@ -328,16 +294,6 @@ class ModelPickerComponent {
 			return;
 		}
 
-		// Tab / Shift+Tab — switch category
-		if (matchesKey(data, Key.tab)) {
-			this.switchCategory(1);
-			return;
-		}
-		if (matchesKey(data, Key.shift("tab"))) {
-			this.switchCategory(-1);
-			return;
-		}
-
 		// ← at start of empty field — switch category left
 		if (!this.fuzzy && matchesKey(data, Key.left) && this.searchInput.getValue() === "") {
 			this.switchCategory(-1);
@@ -355,9 +311,8 @@ class ModelPickerComponent {
 		const after = this.searchInput.getValue();
 
 		if (before !== after) {
-			// Update stored term and refilter
-			const catKey = this.categories[this.catIndex] ?? "";
-			if (!this.fuzzy) this.searchTerms.set(catKey, after);
+			// Global typing must not overwrite saved queries on other tabs.
+			if (!this.fuzzy) this.searchTerms.set(this.searchKey(), after);
 			this.rowIndex = 0;
 			this.applyFilter();
 		}
@@ -366,7 +321,11 @@ class ModelPickerComponent {
 	// ── rendering ────────────────────────────────────────────────────────
 
 	render(width: number, theme: any): string[] {
-		const lines: string[] = [theme.fg("border", "─".repeat(width))];
+		const lines: string[] = [
+			theme.fg("accent", "─".repeat(width)),
+			truncateToWidth(theme.fg("accent", theme.bold("  Select Model")), width),
+			theme.fg("border", "─".repeat(width)),
+		];
 
 		// ── tab bar ──────────────────────────────────────────────────────
 		lines.push(this.renderTabs(width, theme));
@@ -422,6 +381,7 @@ class ModelPickerComponent {
 				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme, colW));
 			}
 		}
+		// The empty-state message occupies one row; keep the count slot too.
 		for (let i = Math.max(1, visible.length); i < MAX_VISIBLE; i++) lines.push("");
 		const position = rows.length ? this.rowIndex + 1 : 0;
 		const selected = rows[this.rowIndex];
@@ -432,6 +392,7 @@ class ModelPickerComponent {
 		lines.push(theme.fg("border", "─".repeat(width)));
 		const help = `↑↓ / Enter select · Tab provider · Ctrl+F ${this.fuzzy ? "search" : "fuzzy"} · Esc/Ctrl+C cancel`;
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
+		lines.push(theme.fg("accent", "─".repeat(width)));
 
 		// Tiny terminal resizes must not emit over-wide prompts, markers, or wide glyphs.
 		return lines.map((line) => truncateToWidth(line, width));
@@ -542,11 +503,8 @@ class ModelPickerComponent {
 // ─── extension ──────────────────────────────────────────────────────────────
 
 export default function modelPickerExtension(pi: ExtensionAPI) {
-	let lastTab: string | undefined;
-	let rememberLastTab = true;
-	try {
-		rememberLastTab = JSON.parse(readFileSync(getSettingsPath(), "utf-8"))?.["pi-model-picker"]?.rememberLastTab !== false;
-	} catch { /* Missing or malformed settings use the default. */ }
+	const rememberLastTab = readSetting("rememberLastTab") !== false;
+	let lastTab: ModelPickerOptions["lastTab"];
 	async function openPicker(ctx: ExtensionContext) {
 		// Same logic as /model: refresh from disk, then only models with auth configured
 		ctx.modelRegistry.refresh();
@@ -573,25 +531,14 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 			// Give the picker focus so the embedded Input gets IME cursor
 			picker.focusedState = true;
 
-			const header = new Container();
-			header.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-			header.addChild(new Text(theme.fg("accent", theme.bold("  Select Model")), 0, 0));
-
-			const footer = new DynamicBorder((s: string) => theme.fg("accent", s));
-
 			return {
 				// Implement Focusable so pi propagates focus to the Input's cursor
 				focused: true,
 
 				render(width: number): string[] {
-					return [
-						...header.render(width),
-						...picker.render(width, theme),
-						...footer.render(width),
-					].map((line) => truncateToWidth(line, width));
+					return picker.render(width, theme);
 				},
 				invalidate() {
-					header.invalidate();
 					picker.invalidate();
 				},
 				handleInput(data: string) {
@@ -608,9 +555,19 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 			ctx.ui.notify(`No API key for ${selected.provider}/${selected.id}`, "error");
 			return;
 		}
-
 		try {
-			await persistDefaultModel(selected, ctx);
+			const settings = SettingsManager.create(ctx.cwd);
+			settings.setDefaultModelAndProvider(selected.provider, selected.id);
+			// Like /model: startup ignores a default outside a non-empty enabledModels scope, so add it.
+			const ref = `${selected.provider}/${selected.id}`;
+			const enabled = settings.getEnabledModels();
+			const inScope = (ctx.scopedModels ?? []).some(({ model }) => model.provider === selected.provider && model.id === selected.id);
+			if (enabled?.length && !inScope && !enabled.some((pattern) => pattern.toLowerCase() === ref.toLowerCase())) {
+				settings.setEnabledModels([...enabled, ref]);
+			}
+			await settings.flush();
+			const error = settings.drainErrors().find((entry) => entry.scope === "global");
+			if (error) throw error.error;
 			ctx.ui.notify(`Model: ${selected.name} (saved as startup default)`, "info");
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
