@@ -52,9 +52,8 @@ async function persistDefaultModel(model: Model<Api>, ctx: ExtensionContext): Pr
 	settings.setDefaultModelAndProvider(model.provider, model.id);
 	// Like /model: startup ignores a default outside a non-empty enabledModels scope, so add it.
 	const ref = `${model.provider}/${model.id}`;
-	const enabled = settings.getEnabledModels();
-	const inScope = (ctx.scopedModels ?? []).some((scoped) => scoped.model.provider === model.provider && scoped.model.id === model.id);
-	if (enabled?.length && !inScope && !enabled.some((pattern) => pattern.toLowerCase() === ref.toLowerCase())) {
+	const enabled = settings.getGlobalSettings().enabledModels;
+	if (enabled?.length && !enabled.some((pattern) => pattern.toLowerCase() === ref.toLowerCase())) {
 		settings.setEnabledModels([...enabled, ref]);
 	}
 	await settings.flush();
@@ -200,8 +199,11 @@ class ModelPickerComponent {
 		}
 	}
 
+	/** Return the provider to restore when the picker reopens. */
 	getLastTab(): string {
-		return this.categories[this.catIndex] ?? "";
+		return this.fuzzy
+			? this.filteredRows[this.rowIndex]?.provider ?? this.categories[this.catIndex] ?? ""
+			: this.categories[this.catIndex] ?? "";
 	}
 
 	// ── public Focusable propagation ─────────────────────────────────────
