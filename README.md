@@ -29,6 +29,7 @@ Instead of a flat searchable list, models are grouped by provider in horizontal 
 - **Search term preserved** per category — switch away and back, your query is still there
 - **Wraparound navigation** — `↑` on the first item jumps to the last, and vice versa
 - **Startup default** — selecting a model saves its provider and ID to pi's global `settings.json`
+- **Stable layout** — ten model rows and a `(selected/total)` counter, including `(0/0)` for no results
 
 ## Install
 
@@ -93,15 +94,21 @@ See pi's [keybindings docs](https://github.com/badlogic/pi-mono) for the key ide
 
 Restart pi (or run `/reload`) after changing `settings.json`.
 
+The picker remembers the last provider tab until reload or restart, including after cancellation.
+Set `pi-model-picker.rememberLastTab` to `false` to start on the current model's provider instead.
+
+`Ctrl+F` toggles fuzzy search across all providers while preserving the query.
+
 ## Controls
 
 | Key | Action |
 |-----|--------|
 | `↑` / `↓` | Navigate models (wraps around) |
-| `Tab` / `Shift+Tab` | Switch provider category |
-| `←` / `→` | Switch category (when search field is empty) |
-| `←` / `→` | Move cursor in search field (when field has text) |
-| Type | Filter models in the current category |
+| `Shift+↑` / `Shift+↓` | Move ten results, stopping at either end |
+| `Ctrl+F` | Toggle provider-scoped search / global fuzzy search |
+| `Tab` / `Shift+Tab` | Switch category, or jump between matching providers without narrowing fuzzy results |
+| `←` / `→` | Switch category when scoped search is empty; otherwise move the text cursor |
+| Type | Filter the current category, or fuzzy-search all providers |
 | `Enter` | Select highlighted model and save it as the startup default |
 | `Esc` | Cancel |
 

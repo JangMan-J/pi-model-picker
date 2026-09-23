@@ -32,6 +32,7 @@ function main() {
 	mkdirSync(EXTENSION_DIR, { recursive: true });
 
 	const files = ["package.json", ...(pkg.files || [])];
+	let failed = false;
 
 	for (const rawEntry of files) {
 		const entry = rawEntry.replace(/\/+$/, "");
@@ -51,8 +52,15 @@ function main() {
 				log(`Copied ${entry}`);
 			}
 		} catch (error) {
+			failed = true;
 			log(`Warning: Could not copy ${entry}: ${error.message}`);
 		}
+	}
+
+	if (failed) {
+		process.exitCode = 1;
+		log("Installation incomplete. See warnings above.");
+		return;
 	}
 
 	log("");

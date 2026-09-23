@@ -30,12 +30,11 @@
  *   to disable the shortcut entirely (the /models command still works).
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { DynamicBorder } from "@mariozechner/pi-coding-agent";
-import { Container, Input, Key, Text, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { DynamicBorder, getAgentDir, SettingsManager } from "@mariozechner/pi-coding-agent";
+import { Container, Input, Key, Text, fuzzyFilter, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { KeyId } from "@mariozechner/pi-tui";
 import type { Api, Model } from "@mariozechner/pi-ai";
 
@@ -44,31 +43,23 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 const DEFAULT_SHORTCUT = "ctrl+shift+m";
 
 function getSettingsPath(): string {
-	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-	return join(agentDir, "settings.json");
+	return join(getAgentDir(), "settings.json");
 }
 
 /** Persist the selected model as pi's startup default. */
-function persistDefaultModel(model: Model<Api>): void {
-	const settingsPath = getSettingsPath();
-	const settingsDir = join(settingsPath, "..");
-	let settings: Record<string, unknown> = {};
-
-	if (existsSync(settingsPath)) {
-		const parsed: unknown = JSON.parse(readFileSync(settingsPath, "utf-8"));
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			throw new Error("settings.json must contain a JSON object");
-		}
-		settings = parsed as Record<string, unknown>;
+async function persistDefaultModel(model: Model<Api>, ctx: ExtensionContext): Promise<void> {
+	const settings = SettingsManager.create(ctx.cwd);
+	settings.setDefaultModelAndProvider(model.provider, model.id);
+	// Like /model: startup ignores a default outside a non-empty enabledModels scope, so add it.
+	const ref = `${model.provider}/${model.id}`;
+	const enabled = settings.getEnabledModels();
+	const inScope = (ctx.scopedModels ?? []).some((scoped) => scoped.model.provider === model.provider && scoped.model.id === model.id);
+	if (enabled?.length && !inScope && !enabled.some((pattern) => pattern.toLowerCase() === ref.toLowerCase())) {
+		settings.setEnabledModels([...enabled, ref]);
 	}
-
-	settings.defaultProvider = model.provider;
-	settings.defaultModel = model.id;
-	mkdirSync(settingsDir, { recursive: true });
-
-	const temporaryPath = `${settingsPath}.${process.pid}.tmp`;
-	writeFileSync(temporaryPath, `${JSON.stringify(settings, null, 2)}\n`, "utf-8");
-	renameSync(temporaryPath, settingsPath);
+	await settings.flush();
+	const error = settings.drainErrors().find((entry) => entry.scope === "global");
+	if (error) throw error.error;
 }
 
 /**
@@ -112,6 +103,23 @@ function providerLabel(id: string): string {
 		.join(" ");
 }
 
+/** Omit identified maker prefixes and redundant provider suffixes, not custom name qualifiers. */
+function modelLabel(model: Model<Api>): string {
+	let name = model.name;
+	const prefix = name.match(/^([^():]+):\s+(?=\S)/);
+	if (prefix) {
+		const maker = prefix[1]!.toLowerCase().replace(/[\s._-]/g, "");
+		const namespace = model.id.includes("/") ? model.id.split("/")[0]! : "";
+		if (maker && [model.provider, namespace].some((id) => id.toLowerCase().replace(/[\s._-]/g, "") === maker)) {
+			name = name.slice(prefix[0].length);
+		}
+	}
+	const suffix = name.match(/\s+\(([^()]*)\)\s*$/);
+	const provider = suffix?.[1].trim().toLowerCase();
+	return suffix && (provider === model.provider.toLowerCase() || provider === providerLabel(model.provider).toLowerCase())
+		? name.slice(0, suffix.index).trimEnd() || name : name;
+}
+
 /** Format context window as human-readable */
 function fmtCtx(tokens: number): string {
 	if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(0)}M`;
@@ -136,6 +144,7 @@ function fmtCost(cost: { input: number; output: number }): string {
 interface ModelPickerOptions {
 	allModels: Model<Api>[];
 	currentModel: Model<Api> | undefined;
+	lastTab?: string;
 	onSelect: (model: Model<Api>) => void;
 	onCancel: () => void;
 }
@@ -147,6 +156,8 @@ class ModelPickerComponent {
 	private categories: string[];
 	private catIndex: number;
 	private rowIndex = 0;
+	private fuzzy = false;
+	private matchingProviders = new Set<string>();
 
 	// per-category source models (sorted, never mutated)
 	private byCategory: Map<string, Model<Api>[]>;
@@ -166,9 +177,8 @@ class ModelPickerComponent {
 
 		// Start on the category of the current model
 		const cur = opts.currentModel;
-		const startCat = cur
-			? (this.byCategory.has(cur.provider) ? cur.provider : this.categories[0])
-			: this.categories[0];
+		const startCat = opts.lastTab && this.byCategory.has(opts.lastTab)
+			? opts.lastTab : cur?.provider ?? this.categories[0];
 		this.catIndex = Math.max(0, this.categories.indexOf(startCat ?? ""));
 
 		// Build the search Input
@@ -188,6 +198,10 @@ class ModelPickerComponent {
 			);
 			this.rowIndex = Math.max(0, idx);
 		}
+	}
+
+	getLastTab(): string {
+		return this.categories[this.catIndex] ?? "";
 	}
 
 	// ── public Focusable propagation ─────────────────────────────────────
@@ -232,23 +246,36 @@ class ModelPickerComponent {
 
 	private applyFilter(): void {
 		const catKey = this.categories[this.catIndex] ?? "";
-		const source = this.byCategory.get(catKey) ?? [];
-		const query = (this.searchTerms.get(catKey) ?? "").toLowerCase().trim();
+		const source = this.fuzzy ? [...this.byCategory.values()].flat() : this.byCategory.get(catKey) ?? [];
+		const query = this.searchInput.getValue().toLowerCase().trim();
 
-		if (!query) {
+		if (this.fuzzy) {
+			this.filteredRows = fuzzyFilter(source, query, (m) => `${m.name} ${m.id} ${m.provider}`);
+		} else if (!query) {
 			this.filteredRows = source;
 		} else {
 			this.filteredRows = source.filter(
 				(m) =>
 					m.name.toLowerCase().includes(query) ||
-					m.id.toLowerCase().includes(query),
+					m.id.toLowerCase().includes(query) ||
+					m.provider.toLowerCase().includes(query),
 			);
 		}
+		this.matchingProviders = new Set(this.filteredRows.map((m) => m.provider));
 		// Clamp row selection
-		this.rowIndex = Math.min(this.rowIndex, Math.max(0, this.filteredRows.length - 1));
+		this.rowIndex = Math.max(0, Math.min(this.rowIndex, this.filteredRows.length - 1));
 	}
 
 	private switchCategory(delta: number): void {
+		if (!this.categories.length) return;
+		if (this.fuzzy) {
+			const providers = this.categories.filter((p) => this.matchingProviders.has(p));
+			if (!providers.length) return;
+			const current = providers.indexOf(this.filteredRows[this.rowIndex]!.provider);
+			const next = providers[(current + delta + providers.length) % providers.length];
+			this.rowIndex = this.filteredRows.findIndex((m) => m.provider === next);
+			return;
+		}
 		// Save current search term for this category before leaving
 		const oldKey = this.categories[this.catIndex] ?? "";
 		this.searchTerms.set(oldKey, this.searchInput.getValue());
@@ -268,8 +295,24 @@ class ModelPickerComponent {
 	// ── input handling ───────────────────────────────────────────────────
 
 	handleInput(data: string): void {
+		if (matchesKey(data, Key.ctrl("f"))) {
+			this.fuzzy = !this.fuzzy;
+			if (!this.fuzzy) this.searchTerms.set(this.getLastTab(), this.searchInput.getValue());
+			this.rowIndex = 0;
+			this.applyFilter();
+			return;
+		}
+		if (matchesKey(data, Key.shift("up"))) {
+			this.rowIndex = Math.max(0, this.rowIndex - 10);
+			return;
+		}
+		if (matchesKey(data, Key.shift("down"))) {
+			this.rowIndex = Math.max(0, Math.min(this.filteredRows.length - 1, this.rowIndex + 10));
+			return;
+		}
 		// ↑ / ↓ — navigate the list with wraparound
 		if (matchesKey(data, Key.up)) {
+			if (!this.filteredRows.length) return;
 			this.rowIndex =
 				this.rowIndex === 0
 					? this.filteredRows.length - 1
@@ -277,6 +320,7 @@ class ModelPickerComponent {
 			return;
 		}
 		if (matchesKey(data, Key.down)) {
+			if (!this.filteredRows.length) return;
 			this.rowIndex =
 				this.rowIndex === this.filteredRows.length - 1
 					? 0
@@ -295,12 +339,12 @@ class ModelPickerComponent {
 		}
 
 		// ← at start of empty field — switch category left
-		if (matchesKey(data, Key.left) && this.searchInput.getValue() === "") {
+		if (!this.fuzzy && matchesKey(data, Key.left) && this.searchInput.getValue() === "") {
 			this.switchCategory(-1);
 			return;
 		}
 		// → at end of empty field — switch category right
-		if (matchesKey(data, Key.right) && this.searchInput.getValue() === "") {
+		if (!this.fuzzy && matchesKey(data, Key.right) && this.searchInput.getValue() === "") {
 			this.switchCategory(1);
 			return;
 		}
@@ -313,7 +357,7 @@ class ModelPickerComponent {
 		if (before !== after) {
 			// Update stored term and refilter
 			const catKey = this.categories[this.catIndex] ?? "";
-			this.searchTerms.set(catKey, after);
+			if (!this.fuzzy) this.searchTerms.set(catKey, after);
 			this.rowIndex = 0;
 			this.applyFilter();
 		}
@@ -322,20 +366,20 @@ class ModelPickerComponent {
 	// ── rendering ────────────────────────────────────────────────────────
 
 	render(width: number, theme: any): string[] {
-		const lines: string[] = [];
+		const lines: string[] = [theme.fg("border", "─".repeat(width))];
 
 		// ── tab bar ──────────────────────────────────────────────────────
 		lines.push(this.renderTabs(width, theme));
 
 		// ── search field ─────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const prompt = theme.fg("muted", "  Search: ");
-		const promptW = visibleWidth("  Search: ");
-		const inputLines = this.searchInput.render(width - promptW);
+		const promptText = this.fuzzy ? "  Fuzzy: " : "  Search: ";
+		const prompt = theme.fg(this.fuzzy ? "accent" : "muted", promptText);
+		const promptW = visibleWidth(promptText);
+		const inputLines = this.searchInput.render(Math.max(0, width - promptW));
 		lines.push(prompt + (inputLines[0] ?? ""));
 
-		// ── divider ──────────────────────────────────────────────────────
-		lines.push(theme.fg("border", "─".repeat(width)));
+		lines.push("");
 
 		// ── model list ───────────────────────────────────────────────────
 		const MAX_VISIBLE = 10;
@@ -348,21 +392,25 @@ class ModelPickerComponent {
 			const query = this.searchInput.getValue();
 			const msg = query
 				? `  No models match "${query}"`
-				: "  No models in this category";
-			lines.push(theme.fg("muted", msg));
+				: this.fuzzy ? "  No models available" : "  No models in this category";
+			lines.push(theme.fg("muted", truncateToWidth(msg, width)));
 		} else {
+			// Use every fuzzy match so columns do not move when the list scrolls.
+			const measured = this.fuzzy ? rows : visible;
 			const colW = {
-				cost: Math.max(0, ...visible.map((m) => visibleWidth(fmtCost(m.cost)))),
-				ctx: Math.max(0, ...visible.map((m) => visibleWidth(m.contextWindow ? fmtCtx(m.contextWindow) : ""))),
-				thinking: visible.some((m) => m.reasoning) ? "thinking".length : 0,
-				vision: visible.some((m) => m.input.includes("image")) ? "vision".length : 0,
+				name: this.fuzzy ? Math.max(...rows.map((m) => visibleWidth(modelLabel(m)))) : 0,
+				provider: this.fuzzy ? Math.max(...rows.map((m) => visibleWidth(`[${providerLabel(m.provider)}]`))) : 0,
+				cost: Math.max(0, ...measured.map((m) => visibleWidth(fmtCost(m.cost)))),
+				ctx: Math.max(0, ...measured.map((m) => visibleWidth(m.contextWindow ? fmtCtx(m.contextWindow) : ""))),
+				thinking: measured.some((m) => m.reasoning) ? "thinking".length : 0,
+				vision: measured.some((m) => m.input.includes("image")) ? "vision".length : 0,
 			};
-			const infoWidth = () => Object.values(colW).filter(Boolean).reduce((sum, n) => sum + n + 2, -2);
-			// Reserve 10 name columns plus the cursor, current-model mark, and gap;
-			// drop optional columns, least essential first, until the row fits.
-			for (const key of ["cost", "vision", "thinking", "ctx"] as const) {
-				if (infoWidth() + 16 <= width) break;
-				colW[key] = 0;
+			// Keep the model and provider identifiable before showing optional metadata.
+			for (const column of ["cost", "vision", "thinking", "ctx"] as const) {
+				const infoWidth = Math.max(0, [colW.cost, colW.ctx, colW.thinking, colW.vision].filter(Boolean).reduce((sum, n) => sum + n + 2, -2));
+				const labelWidth = this.fuzzy ? colW.name + colW.provider + 8 : 16;
+				if (infoWidth + labelWidth <= width) break;
+				colW[column] = 0;
 			}
 			for (let i = 0; i < visible.length; i++) {
 				const model = visible[i]!;
@@ -373,23 +421,27 @@ class ModelPickerComponent {
 					this.opts.currentModel?.provider === model.provider;
 				lines.push(this.renderRow(model, isSelected, isCurrent, width, theme, colW));
 			}
-			if (rows.length > MAX_VISIBLE) {
-				const shown = `${start + 1}–${Math.min(start + MAX_VISIBLE, rows.length)} of ${rows.length}`;
-				lines.push(theme.fg("dim", "  " + shown));
-			}
 		}
+		for (let i = Math.max(1, visible.length); i < MAX_VISIBLE; i++) lines.push("");
+		const position = rows.length ? this.rowIndex + 1 : 0;
+		const selected = rows[this.rowIndex];
+		const details = `  (${position}/${rows.length})${selected ? ` ${selected.id}` : ""}`;
+		lines.push(...wrapTextWithAnsi(theme.fg("dim", details), width));
 
 		// ── help bar ─────────────────────────────────────────────────────
 		lines.push(theme.fg("border", "─".repeat(width)));
-		const help = "↑↓ navigate  ·  Tab/← → category  ·  enter select  ·  esc cancel";
+		const help = `↑↓ / Enter select · Tab provider · Ctrl+F ${this.fuzzy ? "search" : "fuzzy"} · Esc/Ctrl+C cancel`;
 		lines.push(theme.fg("dim", truncateToWidth("  " + help, width)));
 
-		return lines;
+		// Tiny terminal resizes must not emit over-wide prompts, markers, or wide glyphs.
+		return lines.map((line) => truncateToWidth(line, width));
 	}
 
 	private renderTabs(width: number, theme: any): string {
 		const total = this.categories.length;
-		const active = this.catIndex;
+		if (!total) return "";
+		const selectedProvider = this.fuzzy ? this.filteredRows[this.rowIndex]?.provider : this.categories[this.catIndex];
+		const active = Math.max(0, this.categories.indexOf(selectedProvider ?? this.categories[this.catIndex]!));
 		const ARROW_W = 4; // "◀ " + " ▶"
 		const SEP_W = 1;   // "│"
 		const availForTabs = width - ARROW_W;
@@ -414,11 +466,12 @@ class ModelPickerComponent {
 		const segments: string[] = [];
 		for (let i = lo; i <= hi; i++) {
 			const label = ` ${providerLabel(this.categories[i]!)} `;
-			segments.push(
-				i === active
-					? theme.fg("accent", theme.bold(label))
-					: theme.fg("muted", label),
-			);
+			const selected = this.categories[i] === selectedProvider;
+			const color = selected ? "accent" : this.fuzzy
+				? this.matchingProviders.has(this.categories[i]!) ? "success" : "dim"
+				: "muted";
+			const styled = theme.fg(color, selected ? theme.bold(label) : label);
+			segments.push(selected ? theme.bg("selectedBg", styled) : styled);
 		}
 
 		const tabPart = segments.join(theme.fg("dim", "│"));
@@ -434,7 +487,7 @@ class ModelPickerComponent {
 		isCurrent: boolean,
 		width: number,
 		theme: any,
-		colW: { cost: number; ctx: number; thinking: number; vision: number },
+		colW: { name: number; provider: number; cost: number; ctx: number; thinking: number; vision: number },
 	): string {
 		const prefix = isSelected ? "▶ " : "  ";
 		const ctxStr = model.contextWindow ? fmtCtx(model.contextWindow) : "";
@@ -448,21 +501,27 @@ class ModelPickerComponent {
 		].filter(Boolean).join("  ");
 
 		const curMark = isCurrent ? " ●" : "";
-		const nameAvail = width - visibleWidth(prefix) - visibleWidth(right) - visibleWidth(curMark) - 2;
-		const nameTrunc = truncateToWidth(model.name, Math.max(nameAvail, 10));
+		const nameAvail = Math.max(0, width - visibleWidth(prefix) - visibleWidth(right) - (this.fuzzy ? 2 : visibleWidth(curMark)) - 2);
+		const providerWidth = this.fuzzy ? Math.min(colW.provider, Math.max(0, nameAvail - 12)) : 0;
+		const nameWidth = this.fuzzy ? Math.min(colW.name, Math.max(0, nameAvail - providerWidth - 2)) : nameAvail;
+		const name = truncateToWidth(modelLabel(model), nameWidth);
+		const provider = this.fuzzy && providerWidth >= 2 ? `[${truncateToWidth(providerLabel(model.provider), providerWidth - 2)}]` : "";
+		const nameTrunc = this.fuzzy
+			? name + curMark + " ".repeat(Math.max(0, nameWidth + 2 - visibleWidth(name + curMark))) + "  " + provider
+			: name + curMark;
 		const gap = " ".repeat(
-			Math.max(0, width - visibleWidth(prefix + nameTrunc + curMark) - visibleWidth(right)),
+			Math.max(0, width - visibleWidth(prefix + nameTrunc) - visibleWidth(right)),
 		);
 
 		if (isSelected) {
 			return (
-				theme.fg("accent", prefix + nameTrunc + curMark) +
+				theme.fg("accent", prefix + nameTrunc) +
 				gap +
 				theme.fg("accent", theme.bold(right))
 			);
 		} else if (isCurrent) {
 			return (
-				theme.fg("success", prefix + nameTrunc + curMark) +
+				theme.fg("success", prefix + nameTrunc) +
 				gap +
 				theme.fg("muted", right)
 			);
@@ -483,6 +542,11 @@ class ModelPickerComponent {
 // ─── extension ──────────────────────────────────────────────────────────────
 
 export default function modelPickerExtension(pi: ExtensionAPI) {
+	let lastTab: string | undefined;
+	let rememberLastTab = true;
+	try {
+		rememberLastTab = JSON.parse(readFileSync(getSettingsPath(), "utf-8"))?.["pi-model-picker"]?.rememberLastTab !== false;
+	} catch { /* Missing or malformed settings use the default. */ }
 	async function openPicker(ctx: ExtensionContext) {
 		// Same logic as /model: refresh from disk, then only models with auth configured
 		ctx.modelRegistry.refresh();
@@ -494,11 +558,16 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 		}
 
 		const selected = await ctx.ui.custom<Model<Api> | null>((tui, theme, _kb, done) => {
+			const close = (model: Model<Api> | null) => {
+				if (rememberLastTab) lastTab = picker.getLastTab();
+				done(model);
+			};
 			const picker = new ModelPickerComponent({
 				allModels,
 				currentModel: ctx.model ?? undefined,
-				onSelect: (m) => done(m),
-				onCancel: () => done(null),
+				lastTab,
+				onSelect: close,
+				onCancel: () => close(null),
 			});
 
 			// Give the picker focus so the embedded Input gets IME cursor
@@ -519,7 +588,7 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 						...header.render(width),
 						...picker.render(width, theme),
 						...footer.render(width),
-					];
+					].map((line) => truncateToWidth(line, width));
 				},
 				invalidate() {
 					header.invalidate();
@@ -541,7 +610,7 @@ export default function modelPickerExtension(pi: ExtensionAPI) {
 		}
 
 		try {
-			persistDefaultModel(selected);
+			await persistDefaultModel(selected, ctx);
 			ctx.ui.notify(`Model: ${selected.name} (saved as startup default)`, "info");
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
